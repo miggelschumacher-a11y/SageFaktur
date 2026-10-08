@@ -1,0 +1,227 @@
+﻿@model WipPaListViewModel
+@{
+    ViewData["Title"] = "Abzurechnende PAs";
+
+    // Filter neben der Überschrift: zwei Dropdown-Listen mit Mehrfachauswahl (PA-Nummer und Kundenname).
+    // Jeder Wert steht einmal in der Liste; PAs aufsteigend nach Nummer, Kunden alphabetisch (deutsche Sortierung).
+    var filterPAs = Model.Rows.Where(r => r.PA.HasValue).Select(r => r.PA.Value).Distinct().OrderBy(pa => pa)
+        .Select(pa => pa.ToString()).ToList();
+    var filterKunden = Model.Rows.Select(r => (r.KundeName ?? "").Trim()).Where(name => name.Length > 0).Distinct()
+        .OrderBy(name => name, StringComparer.Create(new System.Globalization.CultureInfo("de-DE"), true)).ToList();
+
+    // Id = Präfix der Element-Ids, Attr = data-Attribut der Tabellenzeile, Name = Bezeichnung im Feld
+    var filters = new[]
+    {
+        (Id: "paFilter", Attr: "pa", Name: "PAs", Values: filterPAs),
+        (Id: "kundeFilter", Attr: "kunde", Name: "Kunden", Values: filterKunden)
+    };
+}
+
+<div class="toolbar">
+    <div class="toolbar-title">
+        <h1>@ViewData["Title"]</h1>
+
+        @* Die Tabelle zeigt nur Zeilen, deren PA UND deren Kunde in den Listen angehakt sind. *@
+        @foreach (var f in filters)
+        {
+            <div class="pa-filter" id="@f.Id" data-row-attr="@f.Attr" data-name="@f.Name">
+                <button type="button" class="pa-filter-toggle" id="@(f.Id)Toggle" aria-haspopup="listbox" aria-expanded="false"
+                        aria-controls="@(f.Id)Panel" disabled="@(f.Values.Count == 0)">
+                    <span class="pa-filter-label" id="@(f.Id)Label">Alle @f.Name (@f.Values.Count)</span>
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+                </button>
+                <div class="pa-filter-panel" id="@(f.Id)Panel" role="listbox" aria-multiselectable="true" aria-label="@f.Name anzeigen" hidden>
+                    @foreach (var value in f.Values)
+                    {
+                        <label class="pa-filter-option">
+                            <input type="checkbox" class="pa-filter-item" value="@value" checked />
+                            <span>@value</span>
+                        </label>
+                    }
+                </div>
+                <button type="button" class="btn btn-secondary" id="@(f.Id)All" disabled="@(f.Values.Count == 0)" title="Alle @f.Name in der Liste auswählen">Alle</button>
+                <button type="button" class="btn btn-secondary" id="@(f.Id)None" disabled="@(f.Values.Count == 0)" title="Alle @f.Name in der Liste abwählen">Keine</button>
+            </div>
+        }
+    </div>
+    <div class="toolbar-info">
+        <span><strong>@Model.PaCount</strong> PAs</span>
+        <span><strong id="selectedCount">@Model.SelectedCount</strong> ausgewählt</span>
+        <span>Summe Endpreis: <strong>@Model.EndpreisTotal.ToString("N2")</strong></span>
+        @if (Model.CanWork)
+        {
+            <a class="btn btn-secondary" asp-action="Index" data-progress="Daten werden geladen …">Neu laden</a>
+        }
+        else
+        {
+            @* Nicht angemeldet oder ohne Berechtigung: "Neu laden" ist gesperrt *@
+            <button type="button" class="btn btn-secondary" disabled>Neu laden</button>
+        }
+        @if (!Model.IsLoggedIn)
+        {
+            <button type="button" class="btn btn-primary" id="loginOpen">Anmelden</button>
+        }
+    </div>
+</div>
+
+@if (Model.ErrorMessage != null)
+{
+    <div class="alert alert-error">@Model.ErrorMessage</div>
+}
+@if (Model.ExportResult != null)
+{
+    @* Ergebnis des Exports als Akkordeon: je erzeugter XML-Datei eine Zeile, nach dem Export aufgeklappt.
+       Mit JavaScript baut wippa.js denselben Block nach dem Export auf. *@
+    <details class="export-result" id="exportStatus" open>
+        <summary>@Model.ExportResult.Files.Count XML-Datei(en) für Sage geschrieben nach @Model.ExportResult.Folder</summary>
+        <ul>
+            @foreach (var file in Model.ExportResult.Files)
+            {
+                <li>@file</li>
+            }
+            @foreach (var pa in Model.ExportResult.PAsWithoutPositions)
+            {
+                <li class="skipped">PA @pa: keine abrechenbaren Positionen, nicht exportiert</li>
+            }
+        </ul>
+    </details>
+}
+
+<form asp-action="Uebernehmen" method="post" id="exportForm" data-export-start-url="@Url.Action("ExportStart")" data-export-step-url="@Url.Action("ExportStep")">
+    <div class="table-wrap">
+        <table class="grid" data-positionen-url="@Url.Action("Positionen")">
+            <thead>
+                <tr>
+                    <th class="col-select">
+                        <input type="checkbox" id="selectAll" title="Alle auswählen" />
+                    </th>
+                    <th class="col-toggle"></th>
+                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].PA)</th>
+                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].KundeNr)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].KundeName)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].PABemerkung)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].PaPiBemerkung)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].FaktuNotizen2)</th>
+                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].Sperrflag)</th>
+                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].Rechnungszeit)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].Problem)</th>
+                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].PAVersion)</th>
+                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].EndpreisSum)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].RueckmeldungSchnittstelle)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (!Model.IsLoggedIn)
+                {
+                    <tr><td colspan="14" class="empty">Bitte anmelden, um die Daten zu laden.</td></tr>
+                }
+                else if (!Model.IsAuthorized)
+                {
+                    <tr><td colspan="14" class="empty">Keine Berechtigung für die Fakturierung mit Sage - es werden keine Daten geladen.</td></tr>
+                }
+                else if (Model.Rows.Count == 0 && Model.ErrorMessage == null)
+                {
+                    <tr><td colspan="14" class="empty">Keine abzurechnenden PAs vorhanden.</td></tr>
+                }
+                @* Erscheint, wenn die Filter (PAs, Kunden) alle Zeilen ausblenden *@
+                <tr id="filterEmpty" hidden><td colspan="14" class="empty">Mit der Auswahl in den Listen PAs und Kunden wird kein PA angezeigt.</td></tr>
+                @for (var i = 0; i < Model.Rows.Count; i++)
+                {
+                    var row = Model.Rows[i];
+                    <tr class="pa-row @(row.IsSelected ? "selected" : null)" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())">
+                        <td class="col-select">
+                            <input asp-for="Rows[i].IsSelected" class="row-select" />
+                            <input type="hidden" asp-for="Rows[i].PA" />
+                        </td>
+                        <td class="col-toggle">
+                            <button type="button" class="row-toggle" aria-expanded="false" aria-controls="detail-@(i)"
+                                    title="Positionen anzeigen">
+                                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                                    <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6" />
+                                </svg>
+                            </button>
+                        </td>
+                        <td class="num">@row.PA</td>
+                        <td class="num">@row.KundeNr</td>
+                        <td>@row.KundeName</td>
+                        <td class="text">@row.PABemerkung</td>
+                        <td class="text">@row.PaPiBemerkung</td>
+                        <td class="text">@row.FaktuNotizen2</td>
+                        <td class="num">@row.Sperrflag</td>
+                        <td class="num">@row.Rechnungszeit</td>
+                        <td class="text">@row.Problem</td>
+                        <td class="num">@row.PAVersion</td>
+                        <td class="num">@Html.DisplayFor(m => m.Rows[i].EndpreisSum)</td>
+                        <td>@row.RueckmeldungSchnittstelle</td>
+                    </tr>
+                    @* Akkordeon-Inhalt: wird beim ersten Aufklappen per /WipPa/Positionen nachgeladen (siehe wippa.js) *@
+                    <tr class="detail-row" id="detail-@(i)" data-pa="@row.PA" hidden>
+                        <td colspan="14">
+                            <div class="detail-panel">
+                                <div class="detail-empty">Positionen werden geladen …</div>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary" disabled="@(!Model.CanWork || Model.Rows.Count == 0)">
+            An Sage übergeben
+        </button>
+    </div>
+</form>
+
+@if (!Model.IsLoggedIn)
+{
+    @* Anmelde-Popup: erscheint beim Öffnen der Seite. "Abbrechen" schließt es, "Anmelden" oben rechts öffnet es wieder. *@
+    <div class="dialog-backdrop" id="loginDialog">
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+            <form asp-action="Login" method="post" autocomplete="off" data-progress="Anmeldung läuft, Daten werden geladen …">
+                <h2 id="loginTitle" class="dialog-title">Anmeldung</h2>
+                <p class="dialog-text">Bitte mit Benutzernummer und Passwort anmelden.</p>
+
+                @if (Model.LoginError != null)
+                {
+                    <div class="dialog-error">@Model.LoginError</div>
+                }
+
+                <div class="field">
+                    <label asp-for="Login.UserNr"></label>
+                    <input asp-for="Login.UserNr" inputmode="numeric" autofocus="@(string.IsNullOrEmpty(Model.Login.UserNr))" autocomplete="username" />
+                    <span asp-validation-for="Login.UserNr" class="field-error"></span>
+                </div>
+                <div class="field">
+                    <label asp-for="Login.Password"></label>
+                    <input asp-for="Login.Password" autofocus="@(!string.IsNullOrEmpty(Model.Login.UserNr))" autocomplete="current-password" />
+                    <span asp-validation-for="Login.Password" class="field-error"></span>
+                </div>
+
+                <div class="dialog-actions">
+                    <button type="button" class="btn btn-secondary" id="loginCancel">Abbrechen</button>
+                    <button type="submit" class="btn btn-primary">Anmelden</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@if (Model.PopupMessage != null)
+{
+    @* Meldungs-Popup, z. B. wenn der Export-Ordner für Sage nicht gültig ist *@
+    <div class="dialog-backdrop" id="messageDialog">
+        <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="messageTitle" aria-describedby="messageText">
+            <h2 id="messageTitle" class="dialog-title">Hinweis</h2>
+            <p id="messageText" class="dialog-message">@Model.PopupMessage</p>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-primary" data-dialog-close autofocus>OK</button>
+            </div>
+        </div>
+    </div>
+}
+
+@section Scripts {
+    <script src="~/js/wippa.js" asp-append-version="true"></script>
+}

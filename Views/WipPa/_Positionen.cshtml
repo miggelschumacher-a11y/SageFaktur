@@ -1,0 +1,56 @@
+@model IEnumerable<IGrouping<int, WipPaketAna>>
+@* Akkordeon-Inhalte aller PAs: je PA ein Block, den wippa.js in die passende Zeile einsetzt *@
+@foreach (var pa in Model)
+{
+    var kopf = pa.First();
+    <div class="detail-panel" data-pa="@pa.Key">
+        <div class="detail-head">
+            <span>@kopf.PA</span>
+            <span>PA-Datum: <strong>@(kopf.PA_Datum?.ToString("dd.MM.yyyy"))</strong></span>
+            <span>Lieferdatum: <strong>@(kopf.Lieferdatum?.ToString("dd.MM.yyyy"))</strong></span>
+            <span>Auftraggeber: <strong>@kopf.Kunde_Auftraggeber</strong> @kopf.KundeName_Auftraggeber</span>
+            <span>Positionen: <strong>@pa.Count()</strong></span>
+        </div>
+        <table class="detail-grid">
+            <thead>
+                <tr>
+                    <th>PI-Nummer</th>
+                    <th>Artikel-Nr.</th>
+                    <th>Artikel</th>
+                    <th>Prüfbericht / Datum</th>
+                    <th>Fix-Parameter</th>
+                    <th>Charge 1</th>
+                    <th>Charge 2</th>
+                    <th>Kundenauftrag</th>
+                    <th class="num">USD</th>
+                    <th class="num">Menge</th>
+                    <th class="num">Endpreis</th>
+                    <th>Konto</th>
+                    <th>KST</th>
+                    <th>LIMS-Identifier</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var pos in pa)
+                {
+                    <tr>
+                        <td>@pos.PINummer</td>
+                        <td>@pos.ArtikelNR</td>
+                        <td class="text">@pos.ArtikelName</td>
+                        <td class="text pre">@pos.PBuDat</td>
+                        <td class="text">@pos.FixParaList</td>
+                        <td>@pos.Charge1</td>
+                        <td>@pos.Charge2</td>
+                        <td>@pos.KundenAuftrag</td>
+                        <td class="num">@pos.USD</td>
+                        <td class="num">@pos.Menge</td>
+                        <td class="num">@(pos.Endpreis?.ToString("N2"))</td>
+                        <td>@pos.Konto</td>
+                        <td>@pos.KST</td>
+                        <td>@pos.LIMSIdentifier</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

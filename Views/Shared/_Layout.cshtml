@@ -1,0 +1,64 @@
+@using Microsoft.Extensions.Options
+@using WipSageWeb.Data
+@inject IOptions<LoginOptions> LoginOptions
+@{
+    var loginUser = Context.Session.GetLoginUser();
+
+    // Hauptseite = aufrufende Web-Applikation; ohne Konfiguration die eigene Startseite
+    var homeUrl = string.IsNullOrWhiteSpace(LoginOptions.Value.ReturnUrl)
+        ? Url.Action("Index", "WipPa")
+        : LoginOptions.Value.ReturnUrl;
+}
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - Fakturierung Sage</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+    <header class="app-header">
+        <img class="app-logo" src="~/img/intertek-logo.png" asp-append-version="true" alt="Intertek - Total Quality. Assured." />
+        <div class="app-actions">
+            @if (loginUser != null)
+            {
+                <span class="app-user">@loginUser.Kurzname</span>
+            }
+            <a class="app-home" href="@homeUrl" title="Zur Hauptseite">
+                <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+                    <path fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                          d="M3 11.5 12 4l9 7.5M5.5 9.8V20h4.5v-6h4v6h4.5V9.8" />
+                </svg>
+                <span class="sr-only">Zur Hauptseite</span>
+            </a>
+            @if (loginUser != null)
+            {
+                <form class="app-logout" asp-controller="WipPa" asp-action="Logout" method="post">
+                    <button type="submit" class="app-power" title="Abmelden">
+                        <img src="~/img/power.png" asp-append-version="true" alt="Abmelden" />
+                    </button>
+                </form>
+            }
+            else
+            {
+                <img class="app-power" src="~/img/power.png" asp-append-version="true" alt="" />
+            }
+        </div>
+    </header>
+    <main class="app-main">
+        @RenderBody()
+    </main>
+
+    @* Fortschritts-Popup für Lade- und Exportaktionen; wird von wippa.js ein- und ausgeblendet *@
+    <div class="dialog-backdrop progress-backdrop" id="progressDialog" hidden>
+        <div class="dialog" role="alertdialog" aria-modal="true" aria-busy="true" aria-labelledby="progressText">
+            <p id="progressText" class="progress-text">Bitte warten …</p>
+            <div class="progress-bar" role="progressbar" aria-labelledby="progressText">
+                <div class="progress-bar-fill"></div>
+            </div>
+        </div>
+    </div>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>
