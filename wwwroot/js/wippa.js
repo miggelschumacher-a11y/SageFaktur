@@ -29,19 +29,59 @@ const WipProgress = (function () {
         if (dialog) dialog.hidden = true;
     }
 
+    // Navigation innerhalb der App (Neu laden, Anmelden): die Sperren sollen dabei NICHT freigegeben werden
     document.querySelectorAll('form[data-progress]').forEach(form =>
-        form.addEventListener('submit', () => show(form.dataset.progress)));
+        form.addEventListener('submit', () => { window.wipInAppNavigation = true; show(form.dataset.progress); }));
 
     document.querySelectorAll('a[data-progress]').forEach(link =>
         link.addEventListener('click', e => {
             // Nur bei normalem Klick - Strg/Shift/Mittelklick öffnen einen neuen Tab
-            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) show(link.dataset.progress);
+            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
+                window.wipInAppNavigation = true;
+                show(link.dataset.progress);
+            }
         }));
 
     // Zurück-Taste des Browsers holt die Seite aus dem Cache - dann darf kein Popup stehen bleiben
     window.addEventListener('pageshow', hide);
 
     return { show: show, hide: hide };
+})();
+
+// Rückfrage-Popup mit OK und Abbrechen (id="confirmDialog"): WipConfirm.ask(text) liefert ein Promise,
+// das mit true (OK) oder false (Abbrechen, Escape) erfüllt wird. Es gibt immer nur eine Rückfrage zugleich.
+const WipConfirm = (function () {
+    const dialog = document.getElementById('confirmDialog');
+    if (!dialog) return { ask: () => Promise.resolve(false) };
+
+    const text = document.getElementById('confirmText');
+    const ok = document.getElementById('confirmOk');
+    const cancel = document.getElementById('confirmCancel');
+    let answer = null;
+
+    function finish(value) {
+        if (!answer) return;
+        const resolve = answer;
+        answer = null;
+        dialog.hidden = true;
+        resolve(value);
+    }
+
+    ok.addEventListener('click', () => finish(true));
+    cancel.addEventListener('click', () => finish(false));
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !dialog.hidden) finish(false); });
+    // Zurück-Taste holt die Seite aus dem Cache - dann darf keine Rückfrage stehen bleiben
+    window.addEventListener('pageshow', () => finish(false));
+
+    return {
+        ask: function (message) {
+            finish(false);
+            text.textContent = message;   // textContent: kein HTML aus Meldungen
+            dialog.hidden = false;
+            cancel.focus();   // Abbrechen ist vorbelegt: Enter löscht nicht aus Versehen eine Datei
+            return new Promise(resolve => { answer = resolve; });
+        }
+    };
 })();
 
 // Anmelde-Popup: "Abbrechen" (oder Escape) schließt es, der Button "Anmelden" in der Leiste öffnet es wieder.
@@ -72,7 +112,12 @@ const WipProgress = (function () {
     const counter = document.getElementById('selectedCount');
     const boxes = Array.from(document.querySelectorAll('input.row-select'));
 
-    function visible() { return boxes.filter(b => !b.closest('tr').hidden); }
+    // Gesperrte PAs (Checkbox disabled) zählen nicht mit und werden von "Alle auswählen" nicht berührt.
+    // Schon übergebene PAs (data-uebergeben) auch nicht: ihr Haken fragt erst nach (siehe "Neu erstellen" unten)
+    function visible() { return boxes.filter(b => !b.disabled && !b.dataset.uebergeben && !b.closest('tr').hidden); }
+
+    // Der Browser kann einen angehakten Zustand wiederherstellen (Zurück, F5) - ohne Rückfrage gilt er nicht
+    boxes.forEach(b => { if (b.dataset.uebergeben) b.checked = false; });
 
     function refresh() {
         const shown = visible();
@@ -172,36 +217,11 @@ const WipProgress = (function () {
     apply();
 })();
 // Akkordeon: Pfeil in der PA-Zeile klappt die Positionen darunter auf und zu.
-// Die Positionen werden erst beim ersten Aufklappen geholt - ein Aufruf für alle PAs,
-// danach kommen sie aus dem Speicher der Seite.
+// Die Positionen eines PA werden beim ersten Aufklappen seiner Zeile geholt (ein Aufruf je PA)
+// und danach aus dem Speicher der Seite gezeigt.
 (function () {
     const table = document.querySelector('table.grid');
     const url = table && table.dataset.positionenUrl;
-    let panels = null;   // Promise<Map<PA, Element>>
-
-    function loadPanels() {
-        if (!panels) {
-            WipProgress.show('Positionen werden geladen …');
-            const request = fetch(url, { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-            // Popup schließen, sobald die Antwort da ist - auch im Fehlerfall
-            request.then(WipProgress.hide, WipProgress.hide);
-            panels = request
-                .then(response => {
-                    if (response.status === 401) throw new Error('Die Sitzung ist abgelaufen. Bitte die Seite neu laden und erneut anmelden.');
-                if (response.status === 403) throw new Error('Sie haben keine Berechtigung für die Fakturierung mit Sage.');
-                    if (!response.ok) throw new Error('Die Positionen konnten nicht geladen werden.');
-                    return response.text();
-                })
-                .then(html => {
-                    const doc = new DOMParser().parseFromString(html, 'text/html');
-                    const map = new Map();
-                    doc.querySelectorAll('.detail-panel[data-pa]').forEach(p => map.set(p.dataset.pa, p));
-                    return map;
-                })
-                .catch(error => { panels = null; throw error; });   // beim nächsten Aufklappen erneut versuchen
-        }
-        return panels;
-    }
 
     function message(detail, text) {
         const panel = detail.querySelector('.detail-panel');
@@ -213,17 +233,39 @@ const WipProgress = (function () {
     }
 
     function fill(detail) {
-        if (detail.dataset.loaded) return;
+        if (detail.dataset.loaded || detail.dataset.loading) return;
+        const pa = detail.dataset.pa;
+        if (!pa) {
+            message(detail, 'Diese Zeile hat keine PA-Nummer - es gibt keine Positionen.');
+            return;
+        }
+
+        detail.dataset.loading = '1';
         message(detail, 'Positionen werden geladen …');
-        loadPanels().then(map => {
-            const panel = map.get(detail.dataset.pa);
-            if (panel) {
-                detail.querySelector('.detail-panel').replaceWith(document.importNode(panel, true));
-            } else {
-                message(detail, 'Zu diesem PA liegen keine abrechenbaren Positionen vor.');
-            }
-            detail.dataset.loaded = '1';
-        }).catch(error => message(detail, error.message));
+        WipProgress.show('Positionen von PA ' + pa + ' werden geladen …');
+
+        fetch(url + '?pa=' + encodeURIComponent(pa), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(response => {
+                if (response.status === 401) throw new Error('Die Sitzung ist abgelaufen. Bitte die Seite neu laden und erneut anmelden.');
+                if (response.status === 403) throw new Error('Sie haben keine Berechtigung für die Fakturierung mit Sage.');
+                if (!response.ok) throw new Error('Die Positionen konnten nicht geladen werden.');
+                return response.text();
+            })
+            .then(html => {
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const panel = doc.querySelector('.detail-panel[data-pa]');
+                if (panel) {
+                    detail.querySelector('.detail-panel').replaceWith(document.importNode(panel, true));
+                } else {
+                    message(detail, 'Zu diesem PA liegen keine abrechenbaren Positionen vor.');
+                }
+                detail.dataset.loaded = '1';
+            })
+            .catch(error => message(detail, error.message))   // ohne "loaded": beim nächsten Aufklappen erneut versuchen
+            .then(() => {
+                delete detail.dataset.loading;
+                WipProgress.hide();   // Popup schließen - nach Erfolg und nach Fehler
+            });
     }
 
     document.querySelectorAll('button.row-toggle').forEach(button => {
@@ -239,7 +281,6 @@ const WipProgress = (function () {
         });
     });
 })();
-
 // Meldungs-Popup: OK-Button oder Escape schließt es.
 // Kommt entweder fertig vom Server (id="messageDialog") oder wird per WipMessage.show() erzeugt.
 const WipMessage = (function () {
@@ -330,6 +371,41 @@ const WipMessage = (function () {
         form.parentNode.insertBefore(result, form);
     }
 
+    // Übergebene PAs sofort als "übergeben" kennzeichnen - wie nach dem Neu laden. Der Haken bleibt anklickbar
+    // (data-uebergeben): er fragt nach, ob die Datei noch einmal erstellt werden soll.
+    function markExported(pa, file) {
+        const now = new Date();
+        const two = n => (n < 10 ? '0' : '') + n;
+        const user = document.querySelector('.app-user');
+        // Zwei Zeilen wie nach dem Neu laden: "übergeben am ..." und darunter "von ..."
+        const zeilen = ['übergeben am ' + two(now.getDate()) + '.' + two(now.getMonth() + 1) + '.' + now.getFullYear() + ' ' + two(now.getHours()) + ':' + two(now.getMinutes())];
+        if (user && user.textContent.trim()) zeilen.push('von ' + user.textContent.trim());
+        document.querySelectorAll('tr.pa-row').forEach(row => {
+            if (row.dataset.pa !== String(pa)) return;
+            const box = row.querySelector('input.row-select');
+            box.checked = false;
+            box.disabled = false;
+            box.dataset.uebergeben = '1';
+            box.title = 'Haken setzen, um die XML-Datei noch einmal zu erstellen';
+            row.classList.add('is-exported');
+            const cell = row.querySelector('.col-status');
+            cell.innerHTML = '<span class="status status-exported"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.5l5 5L19.5 7" /></svg></span>';
+            const badge = cell.firstChild;
+            badge.title = file;
+            const textBox = document.createElement('span');
+            textBox.className = 'status-text';
+            zeilen.forEach(z => {
+                const zeile = document.createElement('span');
+                zeile.textContent = z;
+                textBox.appendChild(zeile);
+            });
+            badge.appendChild(textBox);
+        });
+        document.dispatchEvent(new Event('wip:filter'));   // Zähler "ausgewählt" nachziehen
+        const submit = form.querySelector('.actions button[type=submit]');
+        if (submit && !form.querySelector('input.row-select:not(:disabled):not([data-uebergeben])')) submit.disabled = true;
+    }
+
     async function run(pas) {
         const files = [], skipped = [];
         let folder = '';
@@ -342,7 +418,7 @@ const WipMessage = (function () {
                 const pa = start.pas[i];
                 WipProgress.show('PA ' + pa + ' wird an Sage übergeben (' + (i + 1) + ' von ' + start.pas.length + ') …', i, start.pas.length);
                 const step = await post(form.dataset.exportStepUrl, [['exportId', start.exportId], ['pa', pa]]);
-                if (step.file) files.push(step.file); else skipped.push(pa);
+                if (step.file) { files.push(step.file); markExported(pa, step.file); } else skipped.push(pa);
             }
             WipProgress.show('Export abgeschlossen.', start.pas.length, start.pas.length);
         } catch (error) {
@@ -361,7 +437,7 @@ const WipMessage = (function () {
         e.preventDefault();
         // Nur angehakte Zeilen, die die Filter (PAs, Kunden) gerade anzeigen
         const pas = Array.from(form.querySelectorAll('input.row-select:checked'))
-            .filter(box => !box.closest('tr').hidden)
+            .filter(box => !box.closest('tr').hidden && !box.dataset.uebergeben)
             .map(box => box.closest('td').querySelector('input[type=hidden][name$=".PA"]'))
             .filter(input => input && input.value !== '')
             .map(input => input.value);
@@ -371,4 +447,123 @@ const WipMessage = (function () {
         }
         run(pas);
     });
+})();
+
+// Neu erstellen: Bei einem schon übergebenen PA, den kein anderer Benutzer sperrt, bleibt der Haken aktiv
+// (data-uebergeben). Beim Anhaken fragt ein Popup mit OK und Abbrechen, ob die Datei noch einmal erstellt werden soll.
+// - Abbrechen: der Haken wird wieder entfernt, es passiert nichts.
+// - OK: der Server setzt SageHDR.Datei und DateiErstelltAm auf NULL, löscht die alte XML-Datei aus dem Export-Ordner
+//   (falls sie noch dort liegt) und sperrt den Satz für diesen Benutzer. Die Zeile ist danach ein ganz normaler,
+//   angehakter PA und wird mit "An Sage übergeben" neu erzeugt.
+(function () {
+    const form = document.getElementById('exportForm');
+    const url = form && form.dataset.neuErstellenUrl;
+    if (!url || !window.fetch) return;
+
+    function post(pa) {
+        const body = new URLSearchParams();
+        body.append('__RequestVerificationToken', form.querySelector('input[name=__RequestVerificationToken]').value);
+        body.append('pa', pa);
+        return fetch(url, { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(response => {
+                if (response.status === 401) throw new Error('Die Sitzung ist abgelaufen. Bitte die Seite neu laden und erneut anmelden.');
+                if (response.status === 403) throw new Error('Sie haben keine Berechtigung für die Fakturierung mit Sage.');
+                if (!response.ok) throw new Error('Der Server hat die Anfrage abgelehnt (Status ' + response.status + ').');
+                return response.json();
+            })
+            .then(result => {
+                if (!result.ok) throw new Error(result.message);
+                return result;
+            });
+    }
+
+    // Aus der übergebenen Zeile eine normale, angehakte Zeile machen (wie nach dem Neu laden mit eigener Sperre)
+    function release(row, box) {
+        delete box.dataset.uebergeben;
+        box.removeAttribute('title');
+        box.checked = true;
+        row.classList.remove('is-exported');
+        row.querySelector('.col-status').innerHTML = '';
+        const submit = form.querySelector('.actions button[type=submit]');
+        if (submit) submit.disabled = false;
+        document.dispatchEvent(new Event('wip:filter'));   // Zähler "ausgewählt" nachziehen
+    }
+
+    form.querySelectorAll('input.row-select').forEach(box => {
+        box.addEventListener('change', async () => {
+            if (!box.dataset.uebergeben || !box.checked) return;
+
+            const row = box.closest('tr');
+            const pa = row.dataset.pa;
+            const status = row.querySelector('.status-exported');
+            const datei = status && status.title ? '\n\nDatei: ' + status.title : '';
+            const wann = status ? status.textContent.replace(/\s+/g, ' ').trim() : 'übergeben';
+
+            box.disabled = true;   // keine zweite Rückfrage, während die erste läuft
+            const confirmed = await WipConfirm.ask(
+                'Für PA ' + pa + ' wurde bereits eine XML-Datei erstellt (' + wann + ').' + datei +
+                '\n\nSoll die Datei noch einmal erstellt werden?\nMit OK wird die alte Datei im Export-Ordner gelöscht ' +
+                '(falls sie noch dort liegt) und der PA für Sie gesperrt.');
+            box.disabled = false;
+
+            if (!confirmed) {
+                box.checked = false;
+                document.dispatchEvent(new Event('wip:filter'));
+                return;
+            }
+
+            try {
+                box.disabled = true;
+                WipProgress.show('PA ' + pa + ' wird zum erneuten Erstellen freigegeben …');
+                await post(pa);
+                release(row, box);
+            } catch (error) {
+                box.checked = false;
+                WipMessage.show(error.message);
+            } finally {
+                box.disabled = false;
+                WipProgress.hide();
+            }
+        });
+    });
+})();
+
+// Sperren der PAs in SageHDR: solange die Seite offen ist, jede Minute verlängern.
+// Beim Schließen des Browsers oder Tabs (und beim Wechsel zur Hauptseite) werden sie aus SageHDR gelöscht;
+// beim Neu laden innerhalb der App nicht. Kommt die Freigabe nicht an (Absturz), laufen sie nach
+// 3 Minuten ab (SageSperre.Minuten) und werden beim nächsten Laden bzw. Verlängern gelöscht.
+(function () {
+    const table = document.querySelector('table.grid');
+    const verlaengernUrl = table && table.dataset.sperreVerlaengernUrl;
+    const freigebenUrl = table && table.dataset.sperreFreigebenUrl;
+    const tokenInput = document.querySelector('#exportForm input[name=__RequestVerificationToken]');
+    if (!verlaengernUrl || !freigebenUrl || !tokenInput) return;   // nicht angemeldet oder ohne Berechtigung
+
+    function formData() {
+        const data = new FormData();
+        data.append('__RequestVerificationToken', tokenInput.value);
+        return data;
+    }
+
+    setInterval(() => {
+        fetch(verlaengernUrl, { method: 'POST', body: formData(), credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .catch(() => { /* nächster Versuch in 5 Minuten */ });
+    }, 60 * 1000);
+
+    // Abmelden über das Power-Symbol gibt die Sperren auf dem Server frei - kein zweiter Aufruf nötig
+    document.querySelectorAll('form.app-logout').forEach(f => f.addEventListener('submit', () => { window.wipInAppNavigation = true; }));
+
+    // Freigabe genau einmal schicken - je nach Browser kommt beim Schließen pagehide, beforeunload oder beides
+    let freigegeben = false;
+    function freigeben() {
+        if (window.wipInAppNavigation || freigegeben) return;
+        freigegeben = true;
+        if (navigator.sendBeacon && navigator.sendBeacon(freigebenUrl, formData())) return;
+        // Ohne sendBeacon: Anfrage, die das Schließen der Seite überlebt
+        fetch(freigebenUrl, { method: 'POST', body: formData(), credentials: 'same-origin', keepalive: true }).catch(() => { });
+    }
+    window.addEventListener('pagehide', freigeben);
+    window.addEventListener('beforeunload', freigeben);
+    // Zurück-Taste: Seite kommt aus dem Cache, die Sperren wurden beim Verlassen freigegeben -> neu laden
+    window.addEventListener('pageshow', e => { if (e.persisted) window.location.reload(); else freigegeben = false; });
 })();

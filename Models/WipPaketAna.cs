@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace WipSageWeb.Models
 {
     /// <summary>
-    /// Eine Zeile aus dbo.WIPSage_ProcR_getWIP_PaketAna: eine abzurechnende Position
+    /// Eine Zeile aus dbo.WIPSage_ProcR_getWIP_PaketAnaEx: eine abzurechnende Position
     /// (Analyse oder Paket) einer Probe (PI) innerhalb eines PA.
     /// </summary>
     public class WipPaketAna
@@ -23,6 +23,9 @@ namespace WipSageWeb.Models
         public string KundeName_Auftraggeber { get; set; }
 
         public string PINummer { get; set; }
+
+        /// <summary>Laufende Nummer der Analyse innerhalb der Probe (PI) - zusammen mit der PI eindeutig.</summary>
+        public int? Ulfd { get; set; }
         public int? USD { get; set; }
         public string KundenAuftrag { get; set; }
         public string Charge1 { get; set; }
@@ -38,6 +41,9 @@ namespace WipSageWeb.Models
         public string Konto { get; set; }
         public string KST { get; set; }
         public string LIMSIdentifier { get; set; }
+
+        /// <summary>Status und Meldung von Sage aus SagePos (Status, MessageVonSage) zu dieser Position - nur Anzeige.</summary>
+        public WipSageWeb.Data.SageRueckmeldung SageRueckmeldung { get; set; }
 
         /// <summary>
         /// Alle Spalten der Zeile genau so, wie die Prozedur sie liefert (Name und Wert, in der Reihenfolge

@@ -1,4 +1,4 @@
-@model IEnumerable<IGrouping<int, WipPaketAna>>
+﻿@model IEnumerable<IGrouping<int, WipPaketAna>>
 @* Akkordeon-Inhalte aller PAs: je PA ein Block, den wippa.js in die passende Zeile einsetzt *@
 @foreach (var pa in Model)
 {
@@ -15,6 +15,7 @@
             <thead>
                 <tr>
                     <th>PI-Nummer</th>
+                    <th class="num">Ulfd</th>
                     <th>Artikel-Nr.</th>
                     <th>Artikel</th>
                     <th>Prüfbericht / Datum</th>
@@ -28,6 +29,8 @@
                     <th>Konto</th>
                     <th>KST</th>
                     <th>LIMS-Identifier</th>
+                    <th>Sage-Status</th>
+                    <th>Sage-Meldung</th>
                 </tr>
             </thead>
             <tbody>
@@ -35,6 +38,7 @@
                 {
                     <tr>
                         <td>@pos.PINummer</td>
+                        <td class="num">@pos.Ulfd</td>
                         <td>@pos.ArtikelNR</td>
                         <td class="text">@pos.ArtikelName</td>
                         <td class="text pre">@pos.PBuDat</td>
@@ -48,6 +52,8 @@
                         <td>@pos.Konto</td>
                         <td>@pos.KST</td>
                         <td>@pos.LIMSIdentifier</td>
+                        <td>@pos.SageRueckmeldung?.StatusText</td>
+                        <td class="text">@pos.SageRueckmeldung?.MessageVonSage</td>
                     </tr>
                 }
             </tbody>

@@ -22,6 +22,11 @@ namespace WipSageWeb.Data
 
         /// <summary>true, wenn ZugriffEx.SageFaktu = 1 - nur dann darf der Benutzer Daten sehen und exportieren.</summary>
         public bool SageFaktur { get; set; }
+
+        /// <summary>Kennung dieser Anmeldung - damit hebt das Abmelden nur die eigenen Sperren in SageHDR auf.</summary>
+        public string Sitzung { get; set; }
+
+        public SperrInhaber AlsSperrInhaber() => new SperrInhaber { UserNr = UserNr, Kurzname = Kurzname, Sitzung = Sitzung };
     }
 
     /// <summary>Hält die Anmeldung in der Server-Session; im Browser liegt nur das Session-Cookie.</summary>
@@ -31,6 +36,7 @@ namespace WipSageWeb.Data
         private const string KurznameKey = "Kurzname";
         private const string RoleKey = "Role";
         private const string SageFakturKey = "SageFaktur";
+        private const string SitzungKey = "Sitzung";
 
         public static LoginUser GetLoginUser(this ISession session)
         {
@@ -44,7 +50,8 @@ namespace WipSageWeb.Data
                 UserNr = long.Parse(userNr, CultureInfo.InvariantCulture),
                 Kurzname = session.GetString(KurznameKey),
                 Role = session.GetInt32(RoleKey) ?? 0,
-                SageFaktur = session.GetInt32(SageFakturKey) == 1
+                SageFaktur = session.GetInt32(SageFakturKey) == 1,
+                Sitzung = session.GetString(SitzungKey)
             };
         }
 
@@ -54,6 +61,7 @@ namespace WipSageWeb.Data
             session.SetString(KurznameKey, user.Kurzname ?? "");
             session.SetInt32(RoleKey, user.Role);
             session.SetInt32(SageFakturKey, user.SageFaktur ? 1 : 0);
+            session.SetString(SitzungKey, user.Sitzung ?? "");
         }
     }
 }

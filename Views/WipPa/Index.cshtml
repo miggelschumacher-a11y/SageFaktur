@@ -87,9 +87,9 @@
     </details>
 }
 
-<form asp-action="Uebernehmen" method="post" id="exportForm" data-export-start-url="@Url.Action("ExportStart")" data-export-step-url="@Url.Action("ExportStep")">
+<form asp-action="Uebernehmen" method="post" id="exportForm" data-export-start-url="@Url.Action("ExportStart")" data-export-step-url="@Url.Action("ExportStep")" data-neu-erstellen-url="@Url.Action("NeuErstellen")">
     <div class="table-wrap">
-        <table class="grid" data-positionen-url="@Url.Action("Positionen")">
+        <table class="grid" data-positionen-url="@Url.Action("Positionen")" data-sperre-verlaengern-url="@(Model.CanWork ? Url.Action("SperreVerlaengern") : null)" data-sperre-freigeben-url="@(Model.CanWork ? Url.Action("SperreFreigeben") : null)">
             <thead>
                 <tr>
                     <th class="col-select">
@@ -97,6 +97,7 @@
                     </th>
                     <th class="col-toggle"></th>
                     <th class="num">@Html.DisplayNameFor(m => m.Rows[0].PA)</th>
+                    <th>@Html.DisplayNameFor(m => m.Rows[0].Zustand)</th>
                     <th class="num">@Html.DisplayNameFor(m => m.Rows[0].KundeNr)</th>
                     <th>@Html.DisplayNameFor(m => m.Rows[0].KundeName)</th>
                     <th>@Html.DisplayNameFor(m => m.Rows[0].PABemerkung)</th>
@@ -113,24 +114,32 @@
             <tbody>
                 @if (!Model.IsLoggedIn)
                 {
-                    <tr><td colspan="14" class="empty">Bitte anmelden, um die Daten zu laden.</td></tr>
+                    <tr><td colspan="15" class="empty">Bitte anmelden, um die Daten zu laden.</td></tr>
                 }
                 else if (!Model.IsAuthorized)
                 {
-                    <tr><td colspan="14" class="empty">Keine Berechtigung für die Fakturierung mit Sage - es werden keine Daten geladen.</td></tr>
+                    <tr><td colspan="15" class="empty">Keine Berechtigung für die Fakturierung mit Sage - es werden keine Daten geladen.</td></tr>
                 }
                 else if (Model.Rows.Count == 0 && Model.ErrorMessage == null)
                 {
-                    <tr><td colspan="14" class="empty">Keine abzurechnenden PAs vorhanden.</td></tr>
+                    <tr><td colspan="15" class="empty">Keine abzurechnenden PAs vorhanden.</td></tr>
                 }
                 @* Erscheint, wenn die Filter (PAs, Kunden) alle Zeilen ausblenden *@
-                <tr id="filterEmpty" hidden><td colspan="14" class="empty">Mit der Auswahl in den Listen PAs und Kunden wird kein PA angezeigt.</td></tr>
+                <tr id="filterEmpty" hidden><td colspan="15" class="empty">Mit der Auswahl in den Listen PAs und Kunden wird kein PA angezeigt.</td></tr>
                 @for (var i = 0; i < Model.Rows.Count; i++)
                 {
                     var row = Model.Rows[i];
-                    <tr class="pa-row @(row.IsSelected ? "selected" : null)" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())">
+                    var zustandKlasse = row.Zustand == PaZustand.Uebergeben ? "is-exported"
+                        : row.Zustand == PaZustand.GesperrtVonAnderem ? "is-locked"
+                        : row.Zustand == PaZustand.Unbekannt ? "is-unknown" : null;
+                    <tr class="pa-row @(row.IsSelected ? "selected" : null) @zustandKlasse" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())">
                         <td class="col-select">
-                            <input asp-for="Rows[i].IsSelected" class="row-select" />
+                            @* Von anderen gesperrte PAs (auch ein dort gerade neu erstelltes) sind nur lesbar: Checkbox gesperrt.
+                               Ein schon übergebener, freier PA bleibt anklickbar (data-uebergeben): beim Anhaken fragt wippa.js,
+                               ob die Datei noch einmal erstellt werden soll. *@
+                            <input asp-for="Rows[i].IsSelected" class="row-select" disabled="@row.IsReadOnly"
+                                   data-uebergeben="@(row.KannNeuErstelltWerden ? "1" : null)"
+                                   title="@(row.KannNeuErstelltWerden ? "Haken setzen, um die XML-Datei noch einmal zu erstellen" : null)" />
                             <input type="hidden" asp-for="Rows[i].PA" />
                         </td>
                         <td class="col-toggle">
@@ -142,6 +151,40 @@
                             </button>
                         </td>
                         <td class="num">@row.PA</td>
+                        <td class="col-status">
+                            @switch (row.Zustand)
+                            {
+                                case PaZustand.Uebergeben:
+                                    <span class="status status-exported" title="@(row.GesperrtFuerAndere ? $"{row.Datei} - wird gerade von {row.GesperrtVon} neu erstellt (gesperrt bis {row.GesperrtBis?.ToString("HH:mm")} Uhr)" : row.Datei)">
+                                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.5l5 5L19.5 7" /></svg>
+                                        <span class="status-text">
+                                            <span>übergeben am @(row.UebergebenAm?.ToString("dd.MM.yyyy HH:mm"))</span>
+                                            @if (!string.IsNullOrEmpty(row.UebergebenVon))
+                                            {
+                                                <span>von @row.UebergebenVon</span>
+                                            }
+                                        </span>
+                                    </span>
+                                    break;
+                                case PaZustand.GesperrtVonAnderem:
+                                    <span class="status status-locked" title="Nur lesbar - gesperrt bis @(row.GesperrtBis?.ToString("HH:mm")) Uhr">
+                                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="currentColor" /><path fill="none" stroke="currentColor" stroke-width="2.2" d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+                                        gesperrt von @row.GesperrtVon
+                                    </span>
+                                    break;
+                                case PaZustand.Unbekannt:
+                                    <span class="status status-unknown" title="Die Sperre konnte nicht geprüft werden">nur lesbar</span>
+                                    break;
+                            }
+                            @if (row.SageRueckmeldung != null && row.SageRueckmeldung.HatRueckmeldungVonSage)
+                            {
+                                @* Rückmeldung von Sage aus SageHDR: Status 2/3 und MessageVonSage ("neu"/"XML erzeugt" zeigt schon das Abzeichen) *@
+                                var fehler = row.SageRueckmeldung.Status == WipSageWeb.Data.SageStatus.FehlerInSage;
+                                <div class="sage-rueckmeldung @(fehler ? "sage-fehler" : null)" title="Status und Meldung von Sage (SageHDR)">
+                                    @(row.SageRueckmeldung.StatusText ?? "Sage")@(string.IsNullOrWhiteSpace(row.SageRueckmeldung.MessageVonSage) ? "" : ": " + row.SageRueckmeldung.MessageVonSage)
+                                </div>
+                            }
+                        </td>
                         <td class="num">@row.KundeNr</td>
                         <td>@row.KundeName</td>
                         <td class="text">@row.PABemerkung</td>
@@ -156,7 +199,7 @@
                     </tr>
                     @* Akkordeon-Inhalt: wird beim ersten Aufklappen per /WipPa/Positionen nachgeladen (siehe wippa.js) *@
                     <tr class="detail-row" id="detail-@(i)" data-pa="@row.PA" hidden>
-                        <td colspan="14">
+                        <td colspan="15">
                             <div class="detail-panel">
                                 <div class="detail-empty">Positionen werden geladen …</div>
                             </div>
@@ -168,7 +211,7 @@
     </div>
 
     <div class="actions">
-        <button type="submit" class="btn btn-primary" disabled="@(!Model.CanWork || Model.Rows.Count == 0)">
+        <button type="submit" class="btn btn-primary" disabled="@(!Model.CanWork || !Model.Rows.Any(r => r.Zustand == PaZustand.Bearbeitbar))">
             An Sage übergeben
         </button>
     </div>
@@ -204,6 +247,21 @@
                     <button type="submit" class="btn btn-primary">Anmelden</button>
                 </div>
             </form>
+        </div>
+    </div>
+}
+
+@if (Model.CanWork)
+{
+    @* Rückfrage, wenn bei einem schon übergebenen PA der Haken gesetzt wird (siehe wippa.js, WipConfirm) *@
+    <div class="dialog-backdrop" id="confirmDialog" hidden>
+        <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
+            <h2 id="confirmTitle" class="dialog-title">Datei neu erstellen?</h2>
+            <p id="confirmText" class="dialog-message"></p>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-secondary" id="confirmCancel">Abbrechen</button>
+                <button type="button" class="btn btn-primary" id="confirmOk">OK</button>
+            </div>
         </div>
     </div>
 }

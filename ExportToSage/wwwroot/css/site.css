@@ -1,0 +1,450 @@
+/* Material-Design-Optik (angelehnt an Angular Material) in Intertek-Gelb und Schwarz - reines CSS, keine Abhängigkeiten */
+:root {
+    --primary: #000000;
+    --primary-dark: #000000;
+    --accent: #ffc700;
+    --warn: #f44336;
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --text: rgba(0, 0, 0, .87);
+    --text-secondary: rgba(0, 0, 0, .54);
+    --divider: rgba(0, 0, 0, .12);
+    --hover: rgba(0, 0, 0, .04);
+    --selected: rgba(255, 199, 0, .16);
+    --elevation-2: 0 3px 1px -2px rgba(0, 0, 0, .2), 0 2px 2px 0 rgba(0, 0, 0, .14), 0 1px 5px 0 rgba(0, 0, 0, .12);
+    --elevation-4: 0 2px 4px -1px rgba(0, 0, 0, .2), 0 4px 5px 0 rgba(0, 0, 0, .14), 0 1px 10px 0 rgba(0, 0, 0, .12);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    font-family: Roboto, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--text);
+    background: var(--bg);
+}
+
+/* ---- Kopfleiste: Intertek-Gelb, Logo links, Power-Symbol rechts ---- */
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 64px;
+    padding: 0 10px;
+    background: #ffc700;
+    box-shadow: var(--elevation-4);
+    position: relative;
+    z-index: 2;
+}
+.app-logo { height: 54px; width: auto; display: block; }
+.app-actions { display: flex; align-items: center; gap: 14px; align-self: flex-end; margin-bottom: 10px; }
+.app-power { height: 30px; width: 30px; display: block; }
+.app-home { display: block; height: 30px; width: 30px; }
+.app-home svg { display: block; }
+.app-home:hover svg path, .app-home:focus svg path { stroke: #000; }
+.app-logout { margin: 0; }
+.app-user { font-weight: 500; color: #000; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+button.app-power { padding: 0; border: none; background: none; cursor: pointer; }
+button.app-power img { display: block; width: 30px; height: 30px; }
+
+/* ---- Anmelde-Popup (mat-dialog) ---- */
+.dialog-backdrop {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, .5);
+}
+.dialog {
+    width: 100%;
+    max-width: 380px;
+    padding: 24px;
+    background: var(--surface);
+    border-radius: 4px;
+    border-top: 6px solid #ffc700;
+    box-shadow: 0 11px 15px -7px rgba(0, 0, 0, .2), 0 24px 38px 3px rgba(0, 0, 0, .14), 0 9px 46px 8px rgba(0, 0, 0, .12);
+}
+.dialog-backdrop[hidden] { display: none; }
+
+/* ---- Fortschritts-Popup (mat-progress-bar, mode="indeterminate") ---- */
+.progress-backdrop { z-index: 20; }
+.progress-text { margin: 0 0 16px; font-weight: 500; }
+.progress-bar { position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: rgba(255, 199, 0, .3); }
+.progress-bar-fill {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 40%;
+    border-radius: 3px;
+    background: #ffc700;
+    animation: progress-slide 1.4s ease-in-out infinite;
+}
+/* Echter Fortschritt (Export): Balken füllt sich von links, Breite setzt wippa.js */
+.progress-bar.determinate .progress-bar-fill { left: 0; animation: none; transition: width .2s ease; }
+@keyframes progress-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+
+.dialog-title { margin: 0 0 8px; font-size: 20px; line-height: 32px; font-weight: 500; }
+.dialog-text { margin: 0 0 20px; color: var(--text-secondary); }
+.dialog-message { margin: 0; white-space: pre-line; overflow-wrap: break-word; }
+.dialog-error {
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    border-left: 4px solid var(--warn);
+    background: #fdecea;
+    color: #b71c1c;
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+
+.field { margin-bottom: 16px; }
+.field label { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.field input {
+    width: 100%;
+    height: 44px;
+    padding: 0 12px;
+    border: 1px solid rgba(0, 0, 0, .38);
+    border-radius: 4px;
+    font: inherit;
+    color: var(--text);
+    background: var(--surface);
+    outline: none;
+}
+.field input:focus { border-color: #000; box-shadow: 0 0 0 2px #ffc700; }
+.field-error { display: block; margin-top: 4px; font-size: 12px; color: #b71c1c; }
+
+.app-main { padding: 24px; }
+
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.toolbar h1 { font-size: 24px; line-height: 32px; font-weight: 400; margin: 0; }
+.toolbar-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+
+/* ---- Filter PAs / Kunden: Dropdown-Listen mit Mehrfachauswahl (mat-select multiple) ---- */
+.pa-filter { position: relative; display: flex; align-items: center; gap: 8px; }
+.pa-filter-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 190px;
+    height: 36px;
+    padding: 0 8px 0 12px;
+    border: 1px solid rgba(0, 0, 0, .38);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+.pa-filter-toggle:hover, .pa-filter-toggle[aria-expanded=true] { border-color: #000; }
+.pa-filter-toggle:focus-visible { outline: none; border-color: #000; box-shadow: 0 0 0 2px #ffc700; }
+.pa-filter-toggle:disabled { border-color: rgba(0, 0, 0, .12); color: rgba(0, 0, 0, .26); cursor: default; }
+.pa-filter-toggle[aria-expanded=true] svg { transform: rotate(180deg); }
+.pa-filter-panel {
+    position: absolute;
+    top: 40px;
+    left: 0;
+    z-index: 5;
+    min-width: 190px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 4px 0;
+    background: var(--surface);
+    border-radius: 4px;
+    box-shadow: var(--elevation-4);
+}
+.pa-filter-panel[hidden] { display: none; }
+.pa-filter-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 36px;
+    padding: 0 16px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+.pa-filter-option:hover { background: var(--hover); }
+.pa-filter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Kundenliste: Namen sind länger als PA-Nummern */
+#kundeFilter .pa-filter-toggle { min-width: 220px; }
+#kundeFilter .pa-filter-panel { min-width: 300px; max-width: 420px; }
+#kundeFilter .pa-filter-option { font-variant-numeric: normal; padding-top: 6px; padding-bottom: 6px; }
+.toolbar-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ---- Chips (mat-chip) ---- */
+.toolbar-info > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    background: #e0e0e0;
+    color: var(--text);
+    white-space: nowrap;
+}
+.toolbar-info strong { font-weight: 500; }
+
+/* ---- Hinweise ---- */
+.alert {
+    padding: 14px 16px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    background: var(--surface);
+    box-shadow: var(--elevation-2);
+    border-left: 4px solid var(--primary);
+}
+.alert-error { border-left-color: var(--warn); color: #b71c1c; }
+.alert-info  { border-left-color: var(--primary); }
+
+/* ---- Export-Ergebnis als Akkordeon (mat-expansion-panel): je XML-Datei eine Zeile ---- */
+.export-result {
+    margin-bottom: 16px;
+    background: var(--surface);
+    border-radius: 4px;
+    border-left: 4px solid #000;
+    box-shadow: var(--elevation-2);
+}
+.export-result summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 8px 16px;
+    font-weight: 500;
+    cursor: pointer;
+    list-style: none;
+    overflow-wrap: anywhere;
+}
+.export-result summary::-webkit-details-marker { display: none; }
+.export-result summary::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin: 0 6px 0 2px;
+    border-right: 2.4px solid currentColor;
+    border-bottom: 2.4px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform .15s ease;
+}
+.export-result[open] summary::before { transform: rotate(45deg); }
+.export-result summary:hover { background: var(--hover); }
+.export-result ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--divider); }
+.export-result li {
+    padding: 8px 16px 8px 42px;
+    border-bottom: 1px solid var(--divider);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+.export-result li:last-child { border-bottom: none; }
+.export-result li.skipped { color: var(--text-secondary); }
+
+/* ---- Karte mit Tabelle (mat-card + mat-table) ---- */
+.table-wrap {
+    max-height: calc(100vh - 250px);
+    overflow: auto;
+    background: var(--surface);
+    border-radius: 4px;
+    box-shadow: var(--elevation-2);
+}
+
+table.grid {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+table.grid th,
+table.grid td {
+    padding: 0 16px;
+    border-bottom: 1px solid var(--divider);
+    text-align: left;
+    white-space: nowrap;
+}
+table.grid th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    height: 56px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+}
+table.grid td {
+    height: 48px;
+    vertical-align: middle;
+}
+table.grid td.text {
+    white-space: normal;
+    min-width: 160px;
+    max-width: 320px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
+table.grid tbody tr:last-child td { border-bottom: none; }
+table.grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+table.grid th:first-child, table.grid td:first-child { padding-left: 24px; }
+table.grid th:last-child, table.grid td:last-child { padding-right: 24px; }
+table.grid .col-select { width: 58px; padding-right: 0; }
+
+table.grid tbody tr { transition: background-color .15s ease; }
+table.grid tbody tr:hover { background: var(--hover); }
+table.grid tbody tr.selected { background: var(--selected); }
+table.grid td.empty { text-align: center; color: var(--text-secondary); height: 96px; }
+
+/* ---- Zustand aus SageHDR: von anderen gesperrt / bereits übergeben -> nur lesbar ---- */
+table.grid .col-status { white-space: nowrap; }
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.status svg { flex: none; }
+/* Statustext über mehrere Zeilen, z. B. "übergeben am ..." und darunter "von ..." */
+.status-text { display: flex; flex-direction: column; line-height: 1.35; padding: 1px 0; }
+/* Rückmeldung von Sage unter dem Status-Abzeichen */
+.sage-rueckmeldung { margin-top: 4px; max-width: 260px; white-space: normal; font-size: 12px; color: var(--text-secondary); }
+.sage-rueckmeldung.sage-fehler { color: #b71c1c; font-weight: 500; }
+.status-locked   { background: #fdecea; color: #b71c1c; }
+.status-exported { background: #e8f5e9; color: #1b5e20; }
+.status-unknown  { background: #eeeeee; color: var(--text-secondary); }
+table.grid tbody tr.pa-row.is-locked > td,
+table.grid tbody tr.pa-row.is-exported > td,
+table.grid tbody tr.pa-row.is-unknown > td { color: rgba(0, 0, 0, .5); background: #f5f5f5; }
+table.grid tbody tr.pa-row.is-locked > td.col-status,
+table.grid tbody tr.pa-row.is-exported > td.col-status { color: inherit; }
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:disabled { border-color: rgba(0, 0, 0, .26); background-color: transparent; cursor: default; box-shadow: none; }
+
+/* ---- Akkordeon: Positionen je PA (mat-expansion-panel) ---- */
+table.grid .col-toggle { width: 40px; padding: 0 4px; }
+.row-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color .15s ease, transform .15s ease;
+}
+.row-toggle:hover, .row-toggle:focus-visible { background: rgba(0, 0, 0, .08); color: #000; outline: none; }
+.row-toggle[aria-expanded=true] { transform: rotate(90deg); color: #000; }
+table.grid tbody tr.expanded > td { border-bottom-color: transparent; }
+
+table.grid tr.detail-row[hidden] { display: none; }
+table.grid tr.detail-row,
+table.grid tr.detail-row:hover { background: #fffbea; }
+table.grid tr.detail-row > td { height: auto; padding: 0 24px 16px 82px; white-space: normal; }
+.detail-panel { border-left: 4px solid #ffc700; padding-left: 16px; }
+.detail-head { display: flex; flex-wrap: wrap; gap: 6px 24px; padding: 4px 0 10px; color: var(--text-secondary); }
+.detail-head strong { color: var(--text); font-weight: 500; }
+.detail-empty { padding: 8px 0; color: var(--text-secondary); }
+
+table.detail-grid { border-collapse: collapse; background: var(--surface); box-shadow: 0 0 0 1px var(--divider); }
+table.grid table.detail-grid th,
+table.grid table.detail-grid td {
+    position: static;
+    height: 36px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--divider);
+    vertical-align: top;
+}
+table.grid table.detail-grid th { height: 36px; background: #f5f5f5; }
+table.grid table.detail-grid td.text { min-width: 140px; max-width: 300px; }
+table.grid table.detail-grid td.pre { white-space: pre-line; }
+table.grid table.detail-grid tr:hover { background: transparent; }
+
+/* ---- Checkbox (mat-checkbox) ---- */
+:is(table.grid, .pa-filter-panel) input[type=checkbox] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    border: 2px solid var(--text-secondary);
+    border-radius: 2px;
+    background: transparent center / 14px 14px no-repeat;
+    cursor: pointer;
+    outline: none;
+    transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:hover { box-shadow: 0 0 0 10px rgba(0, 0, 0, .04); }
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:focus-visible { box-shadow: 0 0 0 10px rgba(255, 199, 0, .3); }
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:checked,
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:indeterminate {
+    background-color: var(--accent);
+    border-color: #000;
+}
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:checked {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23000' stroke-width='3.2' d='M4.1 12.7 9 17.6 20.3 6.3'/%3E%3C/svg%3E");
+}
+:is(table.grid, .pa-filter-panel) input[type=checkbox]:indeterminate {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath stroke='%23000' stroke-width='3.2' d='M4 12h16'/%3E%3C/svg%3E");
+}
+
+/* ---- Buttons (mat-raised-button / mat-stroked-button) ---- */
+.actions { margin-top: 16px; }
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 64px;
+    height: 36px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 4px;
+    font: inherit;
+    font-weight: 500;
+    letter-spacing: .089em;
+    text-transform: uppercase;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color .15s ease, box-shadow .15s ease;
+}
+.btn-primary {
+    background: #ffc700;
+    color: #000;
+    box-shadow: var(--elevation-2);
+}
+.btn-primary:hover { background: #ffb300; box-shadow: var(--elevation-4); }
+.btn-primary:disabled {
+    background: rgba(0, 0, 0, .12);
+    color: rgba(0, 0, 0, .26);
+    box-shadow: none;
+    cursor: default;
+}
+.btn-secondary {
+    background: transparent;
+    color: #000;
+    border: 1px solid #000;
+}
+.btn-secondary:hover { background: #ffc700; }
+.btn-secondary:disabled,
+.btn-secondary:disabled:hover {
+    background: transparent;
+    border-color: rgba(0, 0, 0, .12);
+    color: rgba(0, 0, 0, .26);
+    cursor: default;
+}
