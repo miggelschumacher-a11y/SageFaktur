@@ -33,12 +33,16 @@ namespace WipSageWeb.Data
         /// <summary>Verlängert die noch gültigen Sperren des Benutzers; liefert die Anzahl.</summary>
         Task<int> SperrenVerlaengernAsync(SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Hebt die Sperren dieser Anmeldung auf; liefert die Anzahl.</summary>
-        Task<int> SperrenFreigebenAsync(SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
+        /// <summary>
+        /// Hebt die Sperren der Seite auf (GesperrtSitzung = "Anmeldung:Seite"), mit <paramref name="ganzeAnmeldung"/>
+        /// die aller Seiten dieser Anmeldung (beim Abmelden); liefert die Anzahl.
+        /// </summary>
+        Task<int> SperrenFreigebenAsync(SperrInhaber inhaber, bool ganzeAnmeldung, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Beansprucht einen PA für seine XML-Datei: setzt DateiErstelltAm nur, wenn noch keine Datei erzeugt
-        /// wurde und kein anderer Benutzer den PA gesperrt hat. Damit entsteht jede Datei nur einmal.
+        /// Beansprucht einen PA direkt vor dem Senden an Sage: setzt Status "XML erzeugt" und AnSageGesendetAm/-Von,
+        /// nur wenn der PA noch nicht übergeben ist (Status "neu" oder "Fehler in Sage") und kein anderer Benutzer
+        /// ihn gesperrt hat. Damit geht jeder PA nur einmal an Sage. Liefert auch die Werte vor dem Beanspruchen.
         /// </summary>
         Task<ExportAnspruch> ExportBeanspruchenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 
@@ -48,21 +52,24 @@ namespace WipSageWeb.Data
         /// </summary>
         Task<int> SagePosErsetzenAsync(int pa, IReadOnlyList<SagePosZeile> zeilen, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Trägt nach dem Schreiben der XML-Datei ihren Namen (ohne Pfad) in SageHDR.Datei ein.</summary>
-        Task ExportAbschliessenAsync(int pa, SperrInhaber inhaber, string datei, CancellationToken cancellationToken = default(CancellationToken));
-
-        /// <summary>Nimmt einen Anspruch zurück, wenn die Datei nicht geschrieben werden konnte.</summary>
-        Task ExportZuruecknehmenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
+        /// <summary>
+        /// Trägt nach der Antwort von Sage Status und MessageVonSage in SageHDR und SagePos ein, dazu die
+        /// OfficeLineHandle (SageHDR und SagePos) und OfficeLineVorgangsHandle (SageHDR) von Sage (null bzw. leer, wenn Sage keine geliefert hat - dann werden die Spalten NULL).
+        /// </summary>
+        Task ExportAbschliessenAsync(int pa, SperrInhaber inhaber, SageStatus status, string messageVonSage,
+            int? officeLineHandle, int? officeLineVorgangsHandle, IReadOnlyList<SagePosHandle> posHandles, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Gibt einen schon übergebenen PA zum erneuten Erstellen frei: setzt Datei und DateiErstelltAm auf NULL und
-        /// sperrt den Satz für den Benutzer - nur, wenn kein anderer Benutzer eine gültige Sperre hält.
-        /// Liefert die bisherige Datei, damit sie aus dem Export-Ordner gelöscht werden kann.
+        /// Der Auftrag konnte nicht an Sage gesendet werden: stellt Status und AnSageGesendetAm/-Von wie vor dem
+        /// Beanspruchen wieder her (Werte aus <paramref name="anspruch"/>).
+        /// </summary>
+        Task ExportZuruecknehmenAsync(int pa, SperrInhaber inhaber, ExportAnspruch anspruch, CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// Gibt einen schon übergebenen PA zur erneuten Übergabe frei: setzt Status auf "neu" und sperrt den Satz
+        /// für den Benutzer - nur, wenn kein anderer Benutzer eine gültige Sperre hält.
         /// </summary>
         Task<NeuErstellenAnspruch> ExportZuruecksetzenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
-
-        /// <summary>Macht ExportZuruecksetzenAsync rückgängig (alte Datei konnte nicht gelöscht werden) und hebt die Sperre auf.</summary>
-        Task ExportWiederherstellenAsync(int pa, SperrInhaber inhaber, string datei, DateTime? erstelltAm, string erstelltVon, SageStatus? status, string messageVonSage, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>Liest SageHDR.Status und MessageVonSage für die PAs; nur Sätze mit Inhalt.</summary>
         Task<IReadOnlyDictionary<int, SageRueckmeldung>> GetSageHdrRueckmeldungAsync(IEnumerable<int> pas, CancellationToken cancellationToken = default(CancellationToken));
@@ -70,7 +77,10 @@ namespace WipSageWeb.Data
         /// <summary>Liest SagePos.Status und MessageVonSage eines PA, Schlüssel: PI (ohne "PI") und Ulfd.</summary>
         Task<IReadOnlyDictionary<(string PI, int Ulfd), SageRueckmeldung>> GetSagePosRueckmeldungAsync(int pa, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Liest Konfig.SageExportOrdner; null, wenn nichts hinterlegt ist.</summary>
-        Task<string> GetSageExportOrdnerAsync(CancellationToken cancellationToken = default(CancellationToken));
+        /// <summary>
+        /// Liest Konfig.SageTest (Testbetrieb) und die Adresse der Sage-Schnittstelle dazu: bei SageTest = true
+        /// Konfig.SageTestExportURL, sonst Konfig.SageReleaseExportURL.
+        /// </summary>
+        Task<SageKonfig> GetSageKonfigAsync(CancellationToken cancellationToken = default(CancellationToken));
     }
 }

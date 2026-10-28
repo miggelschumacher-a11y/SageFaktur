@@ -23,10 +23,15 @@ namespace WipSageWeb.Data
         /// <summary>true, wenn ZugriffEx.SageFaktu = 1 - nur dann darf der Benutzer Daten sehen und exportieren.</summary>
         public bool SageFaktur { get; set; }
 
-        /// <summary>Kennung dieser Anmeldung - damit hebt das Abmelden nur die eigenen Sperren in SageHDR auf.</summary>
+        /// <summary>
+        /// Kennung dieser Anmeldung (<see cref="SperrKennung"/>) - damit hebt das Abmelden nur die eigenen Sperren
+        /// in SageHDR auf.
+        /// </summary>
         public string Sitzung { get; set; }
 
-        public SperrInhaber AlsSperrInhaber() => new SperrInhaber { UserNr = UserNr, Kurzname = Kurzname, Sitzung = Sitzung };
+        /// <summary>Sperr-Inhaber für die geöffnete Seite mit der Kennung <paramref name="seite"/>.</summary>
+        public SperrInhaber AlsSperrInhaber(string seite) =>
+            new SperrInhaber { UserNr = UserNr, Kurzname = Kurzname, Anmeldung = Sitzung, Seite = seite };
     }
 
     /// <summary>Hält die Anmeldung in der Server-Session; im Browser liegt nur das Session-Cookie.</summary>

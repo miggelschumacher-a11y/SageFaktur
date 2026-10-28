@@ -180,15 +180,43 @@ namespace WipSageWeb.Data
             return rows;
         }
 
-        public async Task<string> GetSageExportOrdnerAsync(CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<SageKonfig> GetSageKonfigAsync(CancellationToken cancellationToken = default(CancellationToken))
         {
             using (var connection = new SqlConnection(_connectionString))
-            using (var command = new SqlCommand("select top 1 SageExportOrdner from dbo.Konfig order by ID;", connection))
+            // SageTest entscheidet, welche Adresse gilt: true -> SageTestExportURL, false -> SageReleaseExportURL
+            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL from dbo.Konfig order by ID;", connection))
             {
                 await connection.OpenAsync(cancellationToken);
-                var value = await command.ExecuteScalarAsync(cancellationToken);
-                return value == null || value == DBNull.Value ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
+                using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+                {
+                    if (!await reader.ReadAsync(cancellationToken))
+                    {
+                        return new SageKonfig();
+                    }
+                    var test = IstWahr(reader.IsDBNull(0) ? null : reader.GetValue(0));
+                    return new SageKonfig
+                    {
+                        Test = test,
+                        ExportUrl = GetString(reader, test ? 1 : 2),
+                        ExportUrlFeld = test ? "SageTestExportURL" : "SageReleaseExportURL"
+                    };
+                }
             }
+        }
+
+        // SageTest als bit, Zahl oder Text: true/1 = Testbetrieb, alles andere (auch NULL) = echter Betrieb
+        private static bool IstWahr(object value)
+        {
+            if (value == null)
+            {
+                return false;
+            }
+            if (value is bool flag)
+            {
+                return flag;
+            }
+            var text = Convert.ToString(value, CultureInfo.InvariantCulture).Trim();
+            return text == "1" || string.Equals(text, "true", StringComparison.OrdinalIgnoreCase);
         }
 
         public async Task<bool> GetSageFakturAsync(long userNr, CancellationToken cancellationToken = default(CancellationToken))
@@ -219,6 +247,11 @@ namespace WipSageWeb.Data
                                                                 // Frei = keine Sperre, abgelaufene Sperre oder Sperre desselben Benutzers
         private const string FreiFuerBenutzer = "(h.GesperrtBis IS NULL OR h.GesperrtBis < GETDATE() OR h.GesperrtUserNr = @UserNr)";
 
+        // Übergeben = Status "XML erzeugt" (gesendet bzw. wird gerade gesendet) oder "Alles ok in Sage".
+        // Noch übergebbar sind "neu" (auch NULL) und "Fehler in Sage".
+        private const string NochNichtUebergeben = "ISNULL(h.Status, @StatusNeu) NOT IN (@StatusXmlErzeugt, @StatusAllesOk)";
+        private const string Uebergeben = "ISNULL(h.Status, @StatusNeu) IN (@StatusXmlErzeugt, @StatusAllesOk)";
+
         private const string SperrenSql = @"
                                             SET NOCOUNT ON;
                                             SET XACT_ABORT ON;
@@ -233,12 +266,12 @@ namespace WipSageWeb.Data
 
                                                 -- Kopfsatz für jeden PA anlegen, den es in SageHDR noch nicht gibt.
                                                 -- UPDLOCK, HOLDLOCK: zwei gleichzeitige Aufrufe legen denselben PA nicht doppelt an.
-                                                INSERT INTO dbo.SageHDR (PA, AngelegtAm, AngelegtVon, BelegTyp, Status)
-                                                SELECT p.PA, GETDATE(), @Kurzname, 0, @StatusNeu
+                                                INSERT INTO dbo.SageHDR (PA, AngelegtAm, AngelegtVon, Status)
+                                                SELECT p.PA, GETDATE(), @Kurzname, @StatusNeu
                                                 FROM @p p
                                                 WHERE NOT EXISTS (SELECT 1 FROM dbo.SageHDR h WITH (UPDLOCK, HOLDLOCK) WHERE h.PA = p.PA);
 
-                                                -- Freie und eigene PAs sperren, solange für sie noch keine XML-Datei erzeugt wurde
+                                                -- Freie und eigene PAs sperren, solange sie noch nicht an Sage übergeben sind
                                                 UPDATE h
                                                 SET   h.GesperrtVon     = @Kurzname
                                                     , h.GesperrtUserNr  = @UserNr
@@ -246,14 +279,14 @@ namespace WipSageWeb.Data
                                                     , h.GesperrtBis     = DATEADD(MINUTE, @Minuten, GETDATE())
                                                 FROM dbo.SageHDR h
                                                 INNER JOIN @p p ON p.PA = h.PA
-                                                WHERE h.DateiErstelltAm IS NULL
+                                                WHERE " + NochNichtUebergeben + @"
                                                     AND " + FreiFuerBenutzer + @";
 
                                                 COMMIT TRANSACTION;
 
-                                                SELECT h.PA, h.GesperrtVon, h.GesperrtBis, h.Datei, h.DateiErstelltAm
+                                                SELECT h.PA, h.GesperrtVon, h.GesperrtBis, h.Status
                                                         , CAST(CASE WHEN h.GesperrtBis >= GETDATE() AND ISNULL(h.GesperrtUserNr, -1) <> @UserNr THEN 1 ELSE 0 END AS bit) AS GesperrtFuerAndere
-                                                        , h.DateiErstelltVon
+                                                        , h.AnSageGesendetAm, h.AnSageGesendetVon
                                                 FROM dbo.SageHDR h
                                                 INNER JOIN @p p ON p.PA = h.PA;";
 
@@ -304,10 +337,10 @@ namespace WipSageWeb.Data
                             // - Aufräumen: Bei jedem Laden der Liste und bei jeder Verlängerung löscht der Server alle
                             //   abgelaufenen Sperren aus SageHDR.
                             GesperrtBis = GetDateTime(reader, 2),
-                            Datei = GetString(reader, 3),
-                            DateiErstelltAm = GetDateTime(reader, 4),
-                            GesperrtFuerAndere = reader.GetBoolean(5),
-                            DateiErstelltVon = GetString(reader, 6)
+                            Status = GetStatus(reader, 3),
+                            GesperrtFuerAndere = reader.GetBoolean(4),
+                            AnSageGesendetAm = GetDateTime(reader, 5),
+                            AnSageGesendetVon = GetString(reader, 6)
                         };
                         result[zustand.PA] = zustand;
                     }
@@ -323,7 +356,7 @@ namespace WipSageWeb.Data
                                 " + AbgelaufeneLoeschenSql + @"
                                 SET NOCOUNT OFF;
                                 -- Alle noch gültigen Sperren des Benutzers verlängern - auch die von PAs,
-                                -- deren XML-Datei er schon erzeugt hat (sie bleiben bis zum Verlassen der Seite gesperrt)
+                                -- die er schon an Sage übergeben hat (sie bleiben bis zum Verlassen der Seite gesperrt)
                                 UPDATE h
                                 SET h.GesperrtBis = DATEADD(MINUTE, @Minuten, GETDATE())
                                 FROM dbo.SageHDR h
@@ -332,8 +365,11 @@ namespace WipSageWeb.Data
             return await ExecuteAsync(sql, inhaber, null, cancellationToken);
         }
 
-        public async Task<int> SperrenFreigebenAsync(SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<int> SperrenFreigebenAsync(SperrInhaber inhaber, bool ganzeAnmeldung, CancellationToken cancellationToken = default(CancellationToken))
         {
+            // Seite verlassen: nur die Sperren dieser Seite ("Anmeldung:Seite"). Abmelden: alle Seiten der Anmeldung
+            // ("Anmeldung:%") - dazu Sperren im alten Format ohne Seite (nur "Anmeldung").
+            // Die Kennungen bestehen nur aus Hex-Zeichen (SperrKennung), LIKE-Platzhalter können nicht vorkommen.
             const string sql = @"
                                 UPDATE h
                                 SET   h.GesperrtVon = NULL
@@ -341,36 +377,53 @@ namespace WipSageWeb.Data
                                     , h.GesperrtSitzung = NULL
                                     , h.GesperrtBis = NULL
                                 FROM dbo.SageHDR h
-                                WHERE h.GesperrtSitzung = @Sitzung;";
-            return await ExecuteAsync(sql, inhaber, null, cancellationToken);
+                                WHERE h.GesperrtSitzung = @Sitzung
+                                   OR (@GanzeAnmeldung = 1 AND (h.GesperrtSitzung LIKE @Anmeldung + N':%' OR h.GesperrtSitzung = @Anmeldung));";
+            return await ExecuteAsync(sql, inhaber, command =>
+            {
+                command.Parameters.Add("@GanzeAnmeldung", SqlDbType.Bit).Value = ganzeAnmeldung;
+                command.Parameters.Add("@Anmeldung", SqlDbType.NVarChar, 40).Value = inhaber.Anmeldung;
+            }, cancellationToken);
         }
 
         public async Task<ExportAnspruch> ExportBeanspruchenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Ein einziges UPDATE mit Bedingung: von zwei gleichzeitigen Aufrufen kann nur einer gewinnen
+            // Ein einziges UPDATE mit Bedingung: von zwei gleichzeitigen Aufrufen kann nur einer gewinnen.
+            // Status "XML erzeugt" und AnSageGesendetAm/-Von werden direkt vor dem Senden gesetzt; die alten Werte
+            // kommen zurück, damit sie wiederhergestellt werden können, falls das Senden scheitert.
             const string sql = @"
                                 SET NOCOUNT ON;
 
+                                DECLARE @Alt TABLE (Status tinyint NULL, GesendetAm datetime NULL, GesendetVon nvarchar(30) NULL);
+
                                 UPDATE h
-                                SET   h.DateiErstelltAm  = GETDATE()
-                                    , h.DateiErstelltVon = @Kurzname
-                                    , h.GesperrtVon     = @Kurzname
-                                    , h.GesperrtUserNr  = @UserNr
-                                    , h.GesperrtSitzung = @Sitzung
-                                    , h.GesperrtBis     = DATEADD(MINUTE, @Minuten, GETDATE())
+                                SET   h.Status            = @StatusXmlErzeugt
+                                    , h.AnSageGesendetAm  = GETDATE()
+                                    , h.AnSageGesendetVon = @Kurzname
+                                    , h.GesperrtVon       = @Kurzname
+                                    , h.GesperrtUserNr    = @UserNr
+                                    , h.GesperrtSitzung   = @Sitzung
+                                    , h.GesperrtBis       = DATEADD(MINUTE, @Minuten, GETDATE())
+                                OUTPUT deleted.Status, deleted.AnSageGesendetAm, deleted.AnSageGesendetVon INTO @Alt
                                 FROM dbo.SageHDR h
                                 WHERE h.PA = @PA
-                                  AND h.DateiErstelltAm IS NULL
+                                  AND " + NochNichtUebergeben + @"
                                   AND " + FreiFuerBenutzer + @";
 
                                 DECLARE @Erteilt bit = CASE WHEN @@ROWCOUNT > 0 THEN 1 ELSE 0 END;
 
                                 SELECT @Erteilt AS Erteilt
-                                     , CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.SageHDR WHERE PA = @PA) THEN 1 ELSE 0 END AS bit) AS Vorhanden
-                                     , (SELECT GesperrtVon FROM dbo.SageHDR WHERE PA = @PA) AS GesperrtVon
-                                     , (SELECT Datei FROM dbo.SageHDR WHERE PA = @PA) AS Datei
-                                     , (SELECT DateiErstelltAm FROM dbo.SageHDR WHERE PA = @PA) AS DateiErstelltAm
-                                     , (SELECT DateiErstelltVon FROM dbo.SageHDR WHERE PA = @PA) AS DateiErstelltVon;";
+                                     , CAST(CASE WHEN h.id IS NULL THEN 0 ELSE 1 END AS bit) AS Vorhanden
+                                     , h.GesperrtVon
+                                     , h.Status
+                                     , h.AnSageGesendetAm
+                                     , h.AnSageGesendetVon
+                                     , a.Status      AS AlterStatus
+                                     , a.GesendetAm  AS AltGesendetAm
+                                     , a.GesendetVon AS AltGesendetVon
+                                FROM (SELECT 1 AS x) d
+                                LEFT JOIN dbo.SageHDR h ON h.PA = @PA
+                                LEFT JOIN @Alt a ON 1 = 1;";
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = new SqlCommand(sql, connection))
@@ -387,65 +440,99 @@ namespace WipSageWeb.Data
                         Erteilt = reader.GetBoolean(0),
                         Vorhanden = reader.GetBoolean(1),
                         GesperrtVon = GetString(reader, 2),
-                        Datei = GetString(reader, 3),
-                        DateiErstelltAm = GetDateTime(reader, 4),
-                        DateiErstelltVon = GetString(reader, 5)
+                        Status = GetStatus(reader, 3),
+                        AnSageGesendetAm = GetDateTime(reader, 4),
+                        AnSageGesendetVon = GetString(reader, 5),
+                        AlterStatus = GetStatus(reader, 6),
+                        AltGesendetAm = GetDateTime(reader, 7),
+                        AltGesendetVon = GetString(reader, 8)
                     };
                 }
             }
         }
 
-        public async Task ExportAbschliessenAsync(int pa, SperrInhaber inhaber, string datei, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task ExportAbschliessenAsync(int pa, SperrInhaber inhaber, SageStatus status, string messageVonSage,
+            int? officeLineHandle, int? officeLineVorgangsHandle, IReadOnlyList<SagePosHandle> posHandles, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Die XML-Datei ist geschrieben: Dateiname (ohne Pfad) und Ersteller eintragen, Zeitpunkt aktualisieren.
+            // Antwort von Sage ist da: Status, Meldung von Sage und die OfficeLineHandle in SageHDR und SagePos eintragen.
+            // Nur der Satz, den dieser Benutzer eben beansprucht hat (Status "XML erzeugt", seine Sperre).
             // Der Satz bleibt für den Benutzer gesperrt - die Sperre endet erst beim Verlassen der Seite (oder läuft ab).
+            // Handles der Positionen als XML (<r pi=".." u=".." h=".."/>), Zuordnung über PI und Ulfd.
             const string sql = @"
+                                SET NOCOUNT ON;
+                                SET XACT_ABORT ON;
+
+                                BEGIN TRANSACTION;
+
                                 UPDATE h
-                                SET   h.Datei            = @Datei
-                                    , h.DateiErstelltAm  = GETDATE()
-                                    , h.DateiErstelltVon = @Kurzname
-                                    , h.Status           = @StatusXmlErzeugt
-                                    , h.MessageVonSage   = NULL   -- Meldung zu einer früheren Datei gilt nicht mehr
+                                SET   h.Status           = @Status
+                                    , h.MessageVonSage   = @MessageVonSage
+                                    , h.OfficeLineHandle = @OfficeLineHandle
+                                    , h.OfficeLineVorgangsHandle = @OfficeLineVorgangsHandle
                                     , h.GesperrtBis      = DATEADD(MINUTE, @Minuten, GETDATE())
                                 FROM dbo.SageHDR h
                                 WHERE h.PA = @PA
-                                  AND h.Datei IS NULL
-                                  AND h.DateiErstelltAm IS NOT NULL
+                                  AND h.Status = @StatusXmlErzeugt
                                   AND h.GesperrtUserNr = @UserNr;
 
                                 IF @@ROWCOUNT > 0
                                     UPDATE p
-                                    SET p.Status = @StatusXmlErzeugt, p.MessageVonSage = NULL
+                                    SET   p.Status           = @Status
+                                        , p.MessageVonSage   = @MessageVonSage
+                                        , p.OfficeLineHandle = x.Handle
                                     FROM dbo.SagePos p
                                     INNER JOIN dbo.SageHDR h ON h.id = p.FK_SageHDR
-                                    WHERE h.PA = @PA;";
+                                    LEFT JOIN (SELECT r.v.value('@pi', 'nvarchar(10)') AS PI
+                                                    , r.v.value('@u',  'tinyint')      AS Ulfd
+                                                    , r.v.value('@h',  'int')          AS Handle
+                                               FROM @PosHandles.nodes('/r') AS r(v)) x ON x.PI = p.PI AND x.Ulfd = p.Ulfd
+                                    WHERE h.PA = @PA;
+
+                                COMMIT TRANSACTION;";
+
+            var xml = string.Concat((posHandles ?? new SagePosHandle[0]).Select(z => new System.Xml.Linq.XElement("r",
+                new System.Xml.Linq.XAttribute("pi", z.PI),
+                new System.Xml.Linq.XAttribute("u", z.Ulfd.ToString(CultureInfo.InvariantCulture)),
+                new System.Xml.Linq.XAttribute("h", z.OfficeLineHandle.ToString(CultureInfo.InvariantCulture))).ToString()));
+
             await ExecuteAsync(sql, inhaber, command =>
             {
                 command.Parameters.Add("@PA", SqlDbType.Int).Value = pa;
-                command.Parameters.Add("@Datei", SqlDbType.NVarChar, 100).Value = datei;
+                command.Parameters.Add("@Status", SqlDbType.TinyInt).Value = (byte)status;
+                command.Parameters.Add("@MessageVonSage", SqlDbType.NVarChar, 200).Value = (object)Truncate(messageVonSage, 200) ?? DBNull.Value;
+                command.Parameters.Add("@OfficeLineHandle", SqlDbType.Int).Value = (object)officeLineHandle ?? DBNull.Value;
+                command.Parameters.Add("@OfficeLineVorgangsHandle", SqlDbType.Int).Value = (object)officeLineVorgangsHandle ?? DBNull.Value;
+                command.Parameters.Add("@PosHandles", SqlDbType.Xml).Value = xml;
             }, cancellationToken);
         }
 
-        public async Task ExportZuruecknehmenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task ExportZuruecknehmenAsync(int pa, SperrInhaber inhaber, ExportAnspruch anspruch, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Die Datei konnte nicht geschrieben werden: Anspruch zurücknehmen, der PA ist wieder exportierbar
+            // Der Auftrag konnte nicht an Sage gesendet werden: Status und AnSageGesendetAm/-Von wie vor dem
+            // Beanspruchen, der PA ist wieder übergebbar
             const string sql = @"
                                 UPDATE h
-                                SET h.DateiErstelltAm = NULL, h.DateiErstelltVon = NULL, h.Status = @StatusNeu
+                                SET   h.Status            = @AlterStatus
+                                    , h.AnSageGesendetAm  = @AltGesendetAm
+                                    , h.AnSageGesendetVon = @AltGesendetVon
                                 FROM dbo.SageHDR h
                                 WHERE h.PA = @PA
-                                  AND h.Datei IS NULL
+                                  AND h.Status = @StatusXmlErzeugt
                                   AND h.GesperrtUserNr = @UserNr;";
             await ExecuteAsync(sql, inhaber, command =>
             {
                 command.Parameters.Add("@PA", SqlDbType.Int).Value = pa;
+                command.Parameters.Add("@AlterStatus", SqlDbType.TinyInt).Value = (byte)(anspruch.AlterStatus ?? SageStatus.Neu);
+                command.Parameters.Add("@AltGesendetAm", SqlDbType.DateTime).Value = (object)anspruch.AltGesendetAm ?? DBNull.Value;
+                command.Parameters.Add("@AltGesendetVon", SqlDbType.NVarChar, 30).Value = (object)anspruch.AltGesendetVon ?? DBNull.Value;
             }, cancellationToken);
         }
 
         public async Task<NeuErstellenAnspruch> ExportZuruecksetzenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Alte Werte lesen und Satz zurücksetzen in einer Transaktion: von zwei gleichzeitigen Aufrufen
-            // (oder einem laufenden Export desselben PA) kann nur einer gewinnen
+            // Übergebenen PA wieder auf "neu" setzen und für den Benutzer sperren - in einem UPDATE mit Bedingung:
+            // von zwei gleichzeitigen Aufrufen (oder einem laufenden Export desselben PA) kann nur einer gewinnen.
+            // AnSageGesendetAm/-Von bleiben stehen (letzte Übertragung), bis der PA erneut gesendet wird.
             const string sql = @"
                                 SET NOCOUNT ON;
                                 SET XACT_ABORT ON;
@@ -453,24 +540,16 @@ namespace WipSageWeb.Data
                                 BEGIN TRANSACTION;
                                 " + AbgelaufeneLoeschenSql + @"
 
-                                DECLARE @AlteDatei nvarchar(100), @AlterZeitpunkt datetime2, @AlterErsteller nvarchar(30), @AlterStatus tinyint, @AlteMessage nvarchar(200);
-                                SELECT @AlteDatei = h.Datei, @AlterZeitpunkt = h.DateiErstelltAm, @AlterErsteller = h.DateiErstelltVon, @AlterStatus = h.Status, @AlteMessage = h.MessageVonSage
-                                FROM dbo.SageHDR h WITH (UPDLOCK, HOLDLOCK)
-                                WHERE h.PA = @PA;
-
                                 UPDATE h
-                                SET   h.Datei            = NULL
-                                    , h.DateiErstelltAm  = NULL
-                                    , h.DateiErstelltVon = NULL
-                                    , h.Status           = @StatusNeu
-                                    , h.MessageVonSage   = NULL
+                                SET   h.Status          = @StatusNeu
+                                    , h.MessageVonSage  = NULL
                                     , h.GesperrtVon     = @Kurzname
                                     , h.GesperrtUserNr  = @UserNr
                                     , h.GesperrtSitzung = @Sitzung
                                     , h.GesperrtBis     = DATEADD(MINUTE, @Minuten, GETDATE())
                                 FROM dbo.SageHDR h
                                 WHERE h.PA = @PA
-                                    AND h.DateiErstelltAm IS NOT NULL
+                                    AND " + Uebergeben + @"
                                     AND " + FreiFuerBenutzer + @";
 
                                 DECLARE @Erteilt bit = CASE WHEN @@ROWCOUNT > 0 THEN 1 ELSE 0 END;
@@ -478,12 +557,7 @@ namespace WipSageWeb.Data
 
                                 SELECT @Erteilt AS Erteilt
                                         , CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.SageHDR WHERE PA = @PA) THEN 1 ELSE 0 END AS bit) AS Vorhanden
-                                        , (SELECT GesperrtVon FROM dbo.SageHDR WHERE PA = @PA) AS GesperrtVon
-                                        , @AlteDatei AS AlteDatei
-                                        , @AlterZeitpunkt AS AlterZeitpunkt
-                                        , @AlterErsteller AS AlterErsteller
-                                        , @AlterStatus AS AlterStatus
-                                        , @AlteMessage AS AlteMessage;";
+                                        , (SELECT GesperrtVon FROM dbo.SageHDR WHERE PA = @PA) AS GesperrtVon;";
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = new SqlCommand(sql, connection))
@@ -499,45 +573,10 @@ namespace WipSageWeb.Data
                     {
                         Erteilt = reader.GetBoolean(0),
                         Vorhanden = reader.GetBoolean(1),
-                        GesperrtVon = GetString(reader, 2),
-                        AlteDatei = GetString(reader, 3),
-                        AlterZeitpunkt = GetDateTime(reader, 4),
-                        AlterErsteller = GetString(reader, 5),
-                        AlterStatus = reader.IsDBNull(6) ? (SageStatus?)null : (SageStatus)Convert.ToByte(reader.GetValue(6), CultureInfo.InvariantCulture),
-                        AlteMessageVonSage = GetString(reader, 7)
+                        GesperrtVon = GetString(reader, 2)
                     };
                 }
             }
-        }
-
-        public async Task ExportWiederherstellenAsync(int pa, SperrInhaber inhaber, string datei, DateTime? erstelltAm, string erstelltVon, SageStatus? status, string messageVonSage, CancellationToken cancellationToken = default(CancellationToken))
-        {
-            // Nur der Satz, den dieser Benutzer eben zurückgesetzt hat (noch ohne Datei, noch seine Sperre)
-            const string sql = @"
-                                UPDATE h
-                                SET   h.Datei           = @Datei
-                                    , h.DateiErstelltAm = @ErstelltAm
-                                    , h.DateiErstelltVon = @ErstelltVon
-                                    , h.Status           = @Status
-                                    , h.MessageVonSage   = @MessageVonSage
-                                    , h.GesperrtVon     = NULL
-                                    , h.GesperrtUserNr  = NULL
-                                    , h.GesperrtSitzung = NULL
-                                    , h.GesperrtBis     = NULL
-                                FROM dbo.SageHDR h
-                                WHERE h.PA = @PA
-                                    AND h.Datei IS NULL
-                                    AND h.DateiErstelltAm IS NULL
-                                    AND h.GesperrtUserNr = @UserNr;";
-            await ExecuteAsync(sql, inhaber, command =>
-            {
-                command.Parameters.Add("@PA", SqlDbType.Int).Value = pa;
-                command.Parameters.Add("@Datei", SqlDbType.NVarChar, 100).Value = (object)datei ?? DBNull.Value;
-                command.Parameters.Add("@ErstelltAm", SqlDbType.DateTime2).Value = (object)erstelltAm ?? DBNull.Value;
-                command.Parameters.Add("@ErstelltVon", SqlDbType.NVarChar, 30).Value = (object)erstelltVon ?? DBNull.Value;
-                command.Parameters.Add("@Status", SqlDbType.TinyInt).Value = status.HasValue ? (object)(byte)status.Value : DBNull.Value;
-                command.Parameters.Add("@MessageVonSage", SqlDbType.NVarChar, 200).Value = (object)messageVonSage ?? DBNull.Value;
-            }, cancellationToken);
         }
 
         public async Task<int> SagePosErsetzenAsync(int pa, IReadOnlyList<SagePosZeile> zeilen, CancellationToken cancellationToken = default(CancellationToken))
@@ -564,7 +603,7 @@ SELECT @HdrID
      , x.r.value('@u',  'tinyint')
      , x.r.value('@a',  'nvarchar(10)')
      , x.r.value('@n',  'nvarchar(40)')
-     , @StatusNeu   -- nach dem Schreiben der XML-Datei: @StatusXmlErzeugt
+     , @StatusNeu   -- nach dem Senden an Sage: Status aus der Antwort
 FROM @Zeilen.nodes('/r') AS x(r);
 
 DECLARE @Anzahl int = @@ROWCOUNT;
@@ -601,10 +640,10 @@ SELECT @Anzahl;";
             }
 
             const string sql = @"
-                                SELECT h.PA, h.Status, h.MessageVonSage
+                                SELECT h.PA, h.Status, h.MessageVonSage, h.OfficeLineHandle, h.OfficeLineVorgangsHandle
                                 FROM dbo.SageHDR h
                                 INNER JOIN (SELECT DISTINCT x.v.value('.', 'int') AS PA FROM @PAs.nodes('/p') AS x(v)) p ON p.PA = h.PA
-                                WHERE h.Status IS NOT NULL OR h.MessageVonSage IS NOT NULL;";
+                                WHERE h.Status IS NOT NULL OR h.MessageVonSage IS NOT NULL OR h.OfficeLineHandle IS NOT NULL OR h.OfficeLineVorgangsHandle IS NOT NULL;";
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = new SqlCommand(sql, connection))
@@ -619,8 +658,10 @@ SELECT @Anzahl;";
                     {
                         result[reader.GetInt32(0)] = new SageRueckmeldung
                         {
-                            Status = reader.IsDBNull(1) ? (SageStatus?)null : (SageStatus)Convert.ToByte(reader.GetValue(1), CultureInfo.InvariantCulture),
-                            MessageVonSage = GetString(reader, 2)
+                            Status = GetStatus(reader, 1),
+                            MessageVonSage = GetString(reader, 2),
+                            OfficeLineHandle = GetInt(reader, 3),
+                            OfficeLineVorgangsHandle = GetInt(reader, 4)
                         };
                     }
                 }
@@ -632,11 +673,11 @@ SELECT @Anzahl;";
         {
             var result = new Dictionary<(string PI, int Ulfd), SageRueckmeldung>();
             const string sql = @"
-                                SELECT p.PI, p.Ulfd, p.Status, p.MessageVonSage
+                                SELECT p.PI, p.Ulfd, p.Status, p.MessageVonSage, p.OfficeLineHandle
                                 FROM dbo.SagePos p
                                 INNER JOIN dbo.SageHDR h ON h.id = p.FK_SageHDR
                                 WHERE h.PA = @PA
-                                  AND (p.Status IS NOT NULL OR p.MessageVonSage IS NOT NULL);";
+                                  AND (p.Status IS NOT NULL OR p.MessageVonSage IS NOT NULL OR p.OfficeLineHandle IS NOT NULL);";
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = new SqlCommand(sql, connection))
@@ -651,8 +692,9 @@ SELECT @Anzahl;";
                         var key = ((GetString(reader, 0) ?? "").Trim().ToUpperInvariant(), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture));
                         result[key] = new SageRueckmeldung
                         {
-                            Status = reader.IsDBNull(2) ? (SageStatus?)null : (SageStatus)Convert.ToByte(reader.GetValue(2), CultureInfo.InvariantCulture),
-                            MessageVonSage = GetString(reader, 3)
+                            Status = GetStatus(reader, 2),
+                            MessageVonSage = GetString(reader, 3),
+                            OfficeLineHandle = GetInt(reader, 4)
                         };
                     }
                 }
@@ -686,10 +728,14 @@ SELECT @Anzahl;";
         {
             command.Parameters.Add("@StatusNeu", SqlDbType.TinyInt).Value = (byte)SageStatus.Neu;
             command.Parameters.Add("@StatusXmlErzeugt", SqlDbType.TinyInt).Value = (byte)SageStatus.XmlErzeugt;
+            command.Parameters.Add("@StatusAllesOk", SqlDbType.TinyInt).Value = (byte)SageStatus.AllesOkInSage;
         }
 
         private static string Truncate(string value, int length) =>
             value == null || value.Length <= length ? value : value.Substring(0, length);
+
+        private static SageStatus? GetStatus(SqlDataReader r, int i) =>
+            r.IsDBNull(i) ? (SageStatus?)null : (SageStatus)Convert.ToByte(r.GetValue(i), CultureInfo.InvariantCulture);
 
         private static DateTime? GetDateTime(SqlDataReader r, int i) =>
             r.IsDBNull(i) ? (DateTime?)null : Convert.ToDateTime(r.GetValue(i), CultureInfo.InvariantCulture);

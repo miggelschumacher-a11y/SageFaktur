@@ -8,15 +8,15 @@ namespace WipSageWeb.Data
     /// </summary>
     public enum SageStatus : byte
     {
-        /// <summary>Satz angelegt, noch keine XML-Datei.</summary>
+        /// <summary>Satz angelegt, noch nicht an Sage gesendet (oder zur erneuten Übergabe freigegeben).</summary>
         [Display(Name = "neu")]
         Neu = 0,
 
-        /// <summary>Die App hat die XML-Datei für Sage erzeugt.</summary>
+        /// <summary>Die App hat die XML-Daten an Sage gesendet; die Antwort steht aus oder kam nicht.</summary>
         [Display(Name = "XML erzeugt")]
         XmlErzeugt = 1,
 
-        /// <summary>Sage hat die Datei ohne Fehler verarbeitet (Rückmeldung von Sage).</summary>
+        /// <summary>Sage hat den Auftrag angelegt (Antwort der Sage-Schnittstelle).</summary>
         [Display(Name = "Alles ok in Sage")]
         AllesOkInSage = 2,
 
@@ -27,6 +27,13 @@ namespace WipSageWeb.Data
 
     public static class SageStatusText
     {
+        /// <summary>
+        /// Schon an Sage übergeben: "XML erzeugt" (gesendet bzw. wird gerade gesendet, Antwort offen) oder
+        /// "Alles ok in Sage". "neu" und "Fehler in Sage" können (erneut) übergeben werden.
+        /// </summary>
+        public static bool IstUebergeben(SageStatus? status) =>
+            status == SageStatus.XmlErzeugt || status == SageStatus.AllesOkInSage;
+
         /// <summary>Anzeigetext wie in SageHDR.StatusText; unbekannte Werte als Zahl.</summary>
         public static string Text(this SageStatus status)
         {

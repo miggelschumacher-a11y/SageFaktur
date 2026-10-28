@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 
 namespace WipSageWeb.Data
 {
@@ -14,14 +15,37 @@ namespace WipSageWeb.Data
         public const int Minuten = 3;
     }
 
-    /// <summary>Wer sperrt: der angemeldete Benutzer mit der Kennung seiner Anmeldung.</summary>
+    /// <summary>
+    /// Kennungen für SageHDR.GesperrtSitzung: "Anmeldung:Seite", je 16 Hex-Zeichen (33 Zeichen, Spalte nvarchar(40)).
+    /// Die Anmeldung wird beim Anmelden vergeben, die Seite bei jedem Laden der Liste. So löscht die Freigabe beim
+    /// Verlassen einer Seite (auch bei F5 oder in einem zweiten Tab) nur die Sperren genau dieser Seite - nicht die,
+    /// die eine gerade neu geladene Seite schon wieder gesetzt hat. Abmelden gibt alle Seiten der Anmeldung frei.
+    /// </summary>
+    public static class SperrKennung
+    {
+        public const int Laenge = 16;
+
+        public static string Neu() => Guid.NewGuid().ToString("N").Substring(0, Laenge);
+
+        /// <summary>16 Hex-Zeichen - nur dann wird eine Kennung aus dem Browser übernommen.</summary>
+        public static bool IstGueltig(string kennung) =>
+            kennung != null && kennung.Length == Laenge && kennung.All(Uri.IsHexDigit);
+    }
+
+    /// <summary>Wer sperrt: der angemeldete Benutzer mit der Kennung seiner Anmeldung und der geöffneten Seite.</summary>
     public sealed class SperrInhaber
     {
         public long UserNr { get; set; }
         public string Kurzname { get; set; }
 
         /// <summary>Kennung der Anmeldung (wird beim Anmelden neu vergeben).</summary>
-        public string Sitzung { get; set; }
+        public string Anmeldung { get; set; }
+
+        /// <summary>Kennung der geöffneten Seite (wird bei jedem Laden der Liste neu vergeben).</summary>
+        public string Seite { get; set; }
+
+        /// <summary>Wert für SageHDR.GesperrtSitzung: "Anmeldung:Seite".</summary>
+        public string Sitzung => Anmeldung + ":" + Seite;
     }
 
     /// <summary>Zustand eines PA in dbo.SageHDR nach dem Sperren.</summary>
@@ -53,40 +77,47 @@ namespace WipSageWeb.Data
         /// </list>
         /// </remarks>
         public DateTime? GesperrtBis { get; set; }
-        public string Datei { get; set; }
-        public DateTime? DateiErstelltAm { get; set; }
 
-        /// <summary>Kurzname des Benutzers, der die XML-Datei erzeugt hat (SageHDR.DateiErstelltVon).</summary>
-        public string DateiErstelltVon { get; set; }
+        /// <summary>SageHDR.Status (Enum SageStatus).</summary>
+        public SageStatus? Status { get; set; }
+
+        /// <summary>Wann und von wem der PA zuletzt an Sage gesendet wurde (SageHDR.AnSageGesendetAm/-Von).</summary>
+        public DateTime? AnSageGesendetAm { get; set; }
+        public string AnSageGesendetVon { get; set; }
 
         /// <summary>Ein anderer Benutzer hält eine noch gültige Sperre (berechnet mit der Uhr des SQL Servers).</summary>
         public bool GesperrtFuerAndere { get; set; }
 
-        /// <summary>Für diesen PA wurde schon eine XML-Datei erzeugt.</summary>
-        public bool IstUebergeben => DateiErstelltAm.HasValue;
+        /// <summary>Schon an Sage übergeben: Status "XML erzeugt" (gesendet bzw. wird gerade gesendet) oder "Alles ok in Sage".</summary>
+        public bool IstUebergeben => SageStatusText.IstUebergeben(Status);
     }
 
-    /// <summary>Ergebnis, wenn ein PA für das Schreiben seiner XML-Datei beansprucht werden soll.</summary>
+    /// <summary>Ergebnis, wenn ein PA zum Senden an Sage beansprucht werden soll.</summary>
     public sealed class ExportAnspruch
     {
-        /// <summary>true: Datei darf geschrieben werden, Datei und DateiErstelltAm sind eingetragen.</summary>
+        /// <summary>true: der PA darf gesendet werden; Status ist "XML erzeugt", AnSageGesendetAm/-Von sind gesetzt.</summary>
         public bool Erteilt { get; set; }
 
         /// <summary>Gibt es den PA in dbo.SageHDR überhaupt?</summary>
         public bool Vorhanden { get; set; }
 
         public string GesperrtVon { get; set; }
-        public string Datei { get; set; }
-        public DateTime? DateiErstelltAm { get; set; }
 
-        /// <summary>Kurzname des Benutzers, der die Datei erzeugt hat.</summary>
-        public string DateiErstelltVon { get; set; }
+        /// <summary>Stand in SageHDR nach dem Versuch (bei nicht erteilt: warum).</summary>
+        public SageStatus? Status { get; set; }
+        public DateTime? AnSageGesendetAm { get; set; }
+        public string AnSageGesendetVon { get; set; }
+
+        /// <summary>Werte vor dem Beanspruchen - zum Wiederherstellen, wenn das Senden scheitert.</summary>
+        public SageStatus? AlterStatus { get; set; }
+        public DateTime? AltGesendetAm { get; set; }
+        public string AltGesendetVon { get; set; }
     }
 
-    /// <summary>Ergebnis, wenn ein schon übergebener PA zum erneuten Erstellen seiner XML-Datei freigegeben werden soll.</summary>
+    /// <summary>Ergebnis, wenn ein schon übergebener PA zur erneuten Übergabe an Sage freigegeben werden soll.</summary>
     public sealed class NeuErstellenAnspruch
     {
-        /// <summary>true: Datei und DateiErstelltAm sind jetzt NULL, der PA ist für den Benutzer gesperrt.</summary>
+        /// <summary>true: Status ist wieder "neu", der PA ist für den Benutzer gesperrt.</summary>
         public bool Erteilt { get; set; }
 
         /// <summary>Gibt es den PA in dbo.SageHDR überhaupt?</summary>
@@ -94,13 +125,6 @@ namespace WipSageWeb.Data
 
         /// <summary>Wer den PA gesperrt hat (wenn nicht erteilt, weil ein anderer Benutzer ihn hält).</summary>
         public string GesperrtVon { get; set; }
-
-        /// <summary>Die bisherige Datei (Name ohne Pfad) und ihr Zeitpunkt - vor dem Zurücksetzen.</summary>
-        public string AlteDatei { get; set; }
-        public DateTime? AlterZeitpunkt { get; set; }
-        public string AlterErsteller { get; set; }
-        public SageStatus? AlterStatus { get; set; }
-        public string AlteMessageVonSage { get; set; }
     }
 
     /// <summary>Eine Zeile für dbo.SagePos: eine übergebene Position (Analyse oder Paket) eines PA.</summary>
@@ -117,6 +141,15 @@ namespace WipSageWeb.Data
         public string ArtikelName { get; set; }
     }
 
+    /// <summary>OfficeLineHandle einer Position aus der Antwort von Sage, für dbo.SagePos (Zuordnung über PI und Ulfd).</summary>
+    public sealed class SagePosHandle
+    {
+        /// <summary>PI-Nummer ohne das Präfix "PI" (wie SagePos.PI).</summary>
+        public string PI { get; set; }
+        public byte Ulfd { get; set; }
+        public int OfficeLineHandle { get; set; }
+    }
+
     /// <summary>
     /// Status und Meldung von Sage (Spalten Status und MessageVonSage in SageHDR bzw. SagePos).
     /// Die App setzt "neu" und "XML erzeugt"; "Alles ok in Sage", "Fehler in Sage" und MessageVonSage kommen von Sage.
@@ -125,6 +158,18 @@ namespace WipSageWeb.Data
     {
         public SageStatus? Status { get; set; }
         public string MessageVonSage { get; set; }
+
+        /// <summary>
+        /// OfficeLineHandle von Sage: interne Nummer des Auftrags (SageHDR) bzw. der Position (SagePos) in Sage
+        /// (Erklärung der Handles siehe <see cref="SageAntwort"/>).
+        /// </summary>
+        public int? OfficeLineHandle { get; set; }
+
+        /// <summary>
+        /// OfficeLineVorgangsHandle (nur SageHDR): interne Nummer des Vorgangs in Sage, zu dem der Auftrag gehört -
+        /// gleich für die ganze Belegkette Auftrag, Lieferschein, Rechnung (siehe <see cref="SageAntwort"/>).
+        /// </summary>
+        public int? OfficeLineVorgangsHandle { get; set; }
 
         /// <summary>Text zum Status wie in SageHDR.StatusText ("neu", "XML erzeugt", ...).</summary>
         public string StatusText => Status?.Text();

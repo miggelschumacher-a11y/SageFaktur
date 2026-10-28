@@ -62,6 +62,10 @@ button.app-power img { display: block; width: 30px; height: 30px; }
     background: rgba(0, 0, 0, .5);
 }
 .dialog {
+    /* Nie höher als das Fenster: lange Meldungen scrollen, die Knöpfe bleiben sichtbar */
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 32px);
     width: 100%;
     max-width: 380px;
     padding: 24px;
@@ -93,7 +97,10 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 
 .dialog-title { margin: 0 0 8px; font-size: 20px; line-height: 32px; font-weight: 500; }
 .dialog-text { margin: 0 0 20px; color: var(--text-secondary); }
-.dialog-message { margin: 0; white-space: pre-line; overflow-wrap: break-word; }
+.dialog-message { flex: 0 1 auto; min-height: 0; margin: 0; overflow-y: auto; white-space: pre-line; overflow-wrap: break-word; }
+.dialog-actions { flex: none; }
+/* Ergebnis des Exports: breiter, damit die Liste der PAs lesbar bleibt */
+.dialog.dialog-wide { max-width: 640px; }
 .dialog-error {
     margin-bottom: 16px;
     padding: 10px 12px;
@@ -215,49 +222,6 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 .alert-error { border-left-color: var(--warn); color: #b71c1c; }
 .alert-info  { border-left-color: var(--primary); }
 
-/* ---- Export-Ergebnis als Akkordeon (mat-expansion-panel): je XML-Datei eine Zeile ---- */
-.export-result {
-    margin-bottom: 16px;
-    background: var(--surface);
-    border-radius: 4px;
-    border-left: 4px solid #000;
-    box-shadow: var(--elevation-2);
-}
-.export-result summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 48px;
-    padding: 8px 16px;
-    font-weight: 500;
-    cursor: pointer;
-    list-style: none;
-    overflow-wrap: anywhere;
-}
-.export-result summary::-webkit-details-marker { display: none; }
-.export-result summary::before {
-    content: "";
-    flex: none;
-    width: 8px;
-    height: 8px;
-    margin: 0 6px 0 2px;
-    border-right: 2.4px solid currentColor;
-    border-bottom: 2.4px solid currentColor;
-    transform: rotate(-45deg);
-    transition: transform .15s ease;
-}
-.export-result[open] summary::before { transform: rotate(45deg); }
-.export-result summary:hover { background: var(--hover); }
-.export-result ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--divider); }
-.export-result li {
-    padding: 8px 16px 8px 42px;
-    border-bottom: 1px solid var(--divider);
-    font-variant-numeric: tabular-nums;
-    overflow-wrap: anywhere;
-}
-.export-result li:last-child { border-bottom: none; }
-.export-result li.skipped { color: var(--text-secondary); }
-
 /* ---- Karte mit Tabelle (mat-card + mat-table) ---- */
 .table-wrap {
     max-height: calc(100vh - 250px);
@@ -320,6 +284,7 @@ table.grid .col-status { white-space: nowrap; }
 /* Rückmeldung von Sage unter dem Status-Abzeichen */
 .sage-rueckmeldung { margin-top: 4px; max-width: 260px; white-space: normal; font-size: 12px; color: var(--text-secondary); }
 .sage-rueckmeldung.sage-fehler { color: #b71c1c; font-weight: 500; }
+.sage-handle { margin-top: 2px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .status-locked   { background: #fdecea; color: #b71c1c; }
 .status-exported { background: #e8f5e9; color: #1b5e20; }
 .status-unknown  { background: #eeeeee; color: var(--text-secondary); }

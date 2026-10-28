@@ -31,6 +31,7 @@
                     <th>LIMS-Identifier</th>
                     <th>Sage-Status</th>
                     <th>Sage-Meldung</th>
+                    <th class="num">Sage-Handle</th>
                 </tr>
             </thead>
             <tbody>
@@ -54,6 +55,7 @@
                         <td>@pos.LIMSIdentifier</td>
                         <td>@pos.SageRueckmeldung?.StatusText</td>
                         <td class="text">@pos.SageRueckmeldung?.MessageVonSage</td>
+                        <td class="num">@pos.SageRueckmeldung?.OfficeLineHandle</td>
                     </tr>
                 }
             </tbody>

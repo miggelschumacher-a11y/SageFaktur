@@ -78,7 +78,7 @@ const WipConfirm = (function () {
             finish(false);
             text.textContent = message;   // textContent: kein HTML aus Meldungen
             dialog.hidden = false;
-            cancel.focus();   // Abbrechen ist vorbelegt: Enter löscht nicht aus Versehen eine Datei
+            cancel.focus();   // Abbrechen ist vorbelegt: Enter übergibt nicht aus Versehen erneut an Sage
             return new Promise(resolve => { answer = resolve; });
         }
     };
@@ -106,7 +106,7 @@ const WipConfirm = (function () {
 })();
 
 // Auswahl-Checkboxen: "Alle auswählen", Zeilen-Markierung und Zähler.
-// Gezählt und per "Alle auswählen" geschaltet werden nur die Zeilen, die die Filter (PAs, Kunden) gerade anzeigen.
+// Gezählt und per "Alle auswählen" geschaltet werden nur die Zeilen, die die Filter (PAs, Kunden, Status) gerade anzeigen.
 (function () {
     const selectAll = document.getElementById('selectAll');
     const counter = document.getElementById('selectedCount');
@@ -142,29 +142,100 @@ const WipConfirm = (function () {
     refresh();
 })();
 
-// Filter neben der Überschrift: Dropdown-Listen mit Mehrfachauswahl (PAs, Kunden).
-// Die Tabelle zeigt nur Zeilen, deren Wert in JEDER Liste angehakt ist. "Alle" / "Keine" schalten eine ganze Liste.
+// Filter neben der Überschrift: Dropdown-Listen mit Mehrfachauswahl (PAs, Kunden-Nr., Kunden, Status).
+// Die Tabelle zeigt nur Zeilen, die zu JEDER Liste passen. "Alle" setzt eine Liste zurück.
+// PAs, Kunden-Nr. und Kunden sind bearbeitbar: der Text im Feld sucht in den Einträgen der Liste (enthält,
+// ohne Groß-/Kleinschreibung). Bei ihnen nimmt ein Haken den Eintrag dazu (nichts angehakt = alle Zeilen),
+// und "Alle" setzt die Auswahl zurück.
+// Dazu kommen die Suchfilter in der zweiten Kopfzeile der Tabelle (Kunden-Nr., Kunde, Sperrflag) - auch sie
+// müssen passen, damit eine Zeile angezeigt wird.
 (function () {
     const rows = Array.from(document.querySelectorAll('tr.pa-row'));
     const empty = document.getElementById('filterEmpty');
 
     const filters = Array.from(document.querySelectorAll('.pa-filter')).map(box => ({
         box: box,
-        attr: box.dataset.rowAttr,          // data-Attribut der Tabellenzeile: "pa" oder "kunde"
+        attr: box.dataset.rowAttr,          // data-Attribut der Tabellenzeile: "pa", "kundenr", "kunde" oder "status"
         name: box.dataset.name,
         toggle: box.querySelector('.pa-filter-toggle'),
+        search: box.querySelector('.pa-filter-search'),   // nur bei bearbeitbaren Listen
         panel: box.querySelector('.pa-filter-panel'),
         label: box.querySelector('.pa-filter-label'),
+        leer: box.querySelector('.pa-filter-leer'),
+        weitere: box.querySelector('.pa-filter-weitere'),
+        // Zusatz (Kunden-Nr.): Haken nehmen Einträge dazu - nichts angehakt = alle Zeilen, sonst nur die angehakten
+        zusatz: !!box.dataset.zusatz,
         items: Array.from(box.querySelectorAll('input.pa-filter-item'))
     }));
-    if (filters.length === 0) return;
+
+    // Suchfilter der zweiten Kopfzeile: PA, Kunden-Nr., Kunde - die Zeile passt, wenn ihr Wert die Eingabe enthält.
+    // Sperrflag und Rechnungszeit sind Dropdowns mit Mehrfachauswahl (.col-combo): Pfeil oder Klick ins Feld öffnet die
+    // Liste mit allen Werten, Tippen sucht darin. Nichts angehakt = alle Zeilen, sonst nur die angehakten Werte.
+    const columns = Array.from(document.querySelectorAll('input.col-filter')).map(input => {
+        const combo = input.closest('.col-combo');
+        const options = combo ? Array.from(combo.querySelectorAll('.col-combo-option')) : [];
+        return {
+            input: input,
+            attr: input.dataset.colAttr,
+            match: input.dataset.match,
+            combo: combo,
+            panel: combo ? combo.querySelector('.col-combo-panel') : null,
+            toggle: combo ? combo.querySelector('.col-combo-toggle') : null,
+            leer: combo ? combo.querySelector('.col-combo-leer') : null,
+            options: options,
+            items: combo ? Array.from(combo.querySelectorAll('input.col-combo-item')) : [],
+            alle: combo ? combo.querySelector('.col-combo-alle') : null
+        };
+    });
+    if (filters.length === 0 && columns.length === 0) return;
+
+    const wrap = document.querySelector('.table-wrap');
+    let eigenesScrollen = false;   // true: das nächste scroll-Ereignis stammt von apply()
+
+    // Anfangszustand beim Laden erzwingen: Firefox stellt beim Neu laden Häkchen und Feldinhalte wieder her, ohne dass
+    // ein change-Ereignis kommt - die Filter würden dann mit alten, unsichtbaren Haken arbeiten (z. B. "alle PAs
+    // angehakt" aus einer früheren Version). Deshalb: Zusatz-Listen ohne Haken, sonst alle angehakt, Suchfelder leer.
+    filters.forEach(f => {
+        f.items.forEach(i => { i.checked = !f.zusatz; });
+        if (f.search) f.search.value = '';
+    });
+    columns.forEach(c => {
+        c.input.value = '';
+        c.items.forEach(i => { i.checked = false; });
+    });
+
+    // Nur Ziffern zulassen (PAs, Kunden-Nr.) - auch beim Einfügen aus der Zwischenablage
+    function nurZiffern(input) {
+        if (input.dataset.ziffern && /\D/.test(input.value)) input.value = input.value.replace(/\D/g, '');
+    }
+
+    function passt(column, row) {
+        const value = (row.dataset[column.attr] || '').trim();
+        if (column.combo) {
+            // Mehrfachauswahl: nichts angehakt = alle; "(leer)" steht für Zeilen ohne Wert
+            if (column.chosen.size === 0) return true;
+            return column.chosen.has(value === '' ? '(leer)' : value);
+        }
+        const query = column.input.value.trim();
+        return query === '' || value.toLowerCase().indexOf(query.toLowerCase()) >= 0;
+    }
 
     function apply() {
         filters.forEach(f => {
             f.chosen = new Set(f.items.filter(i => i.checked).map(i => i.value));
-            f.label.textContent = f.chosen.size === f.items.length ? 'Alle ' + f.name + ' (' + f.items.length + ')'
+            const text = f.chosen.size === f.items.length || (f.zusatz && f.chosen.size === 0) ? 'Alle ' + f.name + ' (' + f.items.length + ')'
                 : f.chosen.size === 0 ? 'Keine ' + f.name + ' ausgewählt'
                 : f.chosen.size + ' von ' + f.items.length + ' ' + f.name;
+            // Bearbeitbare Liste: Auswahl als Platzhalter im Suchfeld (sichtbar, solange nichts eingetippt ist)
+            if (f.search) f.search.placeholder = text; else if (f.label) f.label.textContent = text;
+            weitereAnzeigen(f);
+        });
+        columns.filter(c => c.combo).forEach(c => {
+            const werte = c.items.filter(i => i.checked).map(i => i.value);
+            c.chosen = new Set(werte);
+            // Auswahl als Platzhalter im Feld: "Alle", bis zu drei Werte oder "n ausgewählt"
+            c.input.placeholder = werte.length === 0 ? 'Alle' : werte.length <= 3 ? werte.join(', ') : werte.length + ' ausgewählt';
+            if (c.alle) c.alle.classList.toggle('aktiv', werte.length === 0);
         });
 
         let shown = 0;
@@ -172,9 +243,10 @@ const WipConfirm = (function () {
             // Zeilen ohne Wert (keine PA-Nummer / kein Kundenname) lassen sich in der jeweiligen Liste
             // nicht abwählen und werden von ihr nicht ausgeblendet
             const hide = filters.some(f => {
+                if (f.zusatz && f.chosen.size === 0) return false;   // nichts angehakt = alle
                 const value = row.dataset[f.attr];
                 return value !== '' && value !== undefined && !f.chosen.has(value);
-            });
+            }) || columns.some(c => !passt(c, row));
             row.hidden = hide;
             if (!hide) shown++;
 
@@ -186,7 +258,42 @@ const WipConfirm = (function () {
         });
         if (empty) empty.hidden = rows.length === 0 || shown > 0;
 
+        // Nach jeder Filteränderung an den Anfang der Tabelle: war sie heruntergescrollt, lägen die ersten Treffer
+        // sonst verdeckt oberhalb des sichtbaren Bereichs (die Kopfzeilen bleiben oben stehen)
+        if (wrap && wrap.scrollTop > 0) {
+            eigenesScrollen = true;
+            wrap.scrollTop = 0;
+        }
+
         document.dispatchEvent(new Event('wip:filter'));   // Zähler und "Alle auswählen" nachziehen
+    }
+
+    // Einträge der Liste nach dem Suchtext ein- und ausblenden
+    function suchen(f) {
+        const query = f.search ? f.search.value.trim().toLowerCase() : '';
+        let treffer = 0;
+        f.items.forEach(i => {
+            const option = i.closest('.pa-filter-option');
+            const zeigen = query === '' || option.textContent.trim().toLowerCase().indexOf(query) >= 0;
+            option.hidden = !zeigen;
+            if (zeigen) treffer++;
+        });
+        if (f.leer) f.leer.hidden = treffer > 0;
+        weitereAnzeigen(f);
+    }
+
+    // Zusatz-Listen: angehakte Einträge, die die Suche gerade ausblendet, als Hinweis in der Liste nennen -
+    // sonst wirkt der Filter, als zeige er Zeilen, die gar nicht angehakt sind
+    function weitereAnzeigen(f) {
+        if (!f.weitere) return;
+        const versteckt = f.zusatz ? f.items.filter(i => i.checked && i.closest('.pa-filter-option').hidden).length : 0;
+        f.weitere.hidden = versteckt === 0;
+        f.weitere.textContent = 'Außerdem angehakt: ' + versteckt + ' (nicht in der Suche)';
+    }
+
+    // Einträge, die die Suche gerade zeigt (für Listen ohne Zusatz: "Alle" hakt nur die gefundenen an)
+    function sichtbareItems(f) {
+        return f.items.filter(i => !i.closest('.pa-filter-option').hidden);
     }
 
     function open(f, show) {
@@ -199,19 +306,119 @@ const WipConfirm = (function () {
             const show = f.panel.hidden;
             filters.forEach(other => open(other, false));   // immer nur eine Liste offen
             open(f, show);
+            if (show && f.search) f.search.focus();
         });
+        if (f.search) {
+            // Tippen im Feld öffnet die Liste und sucht darin
+            f.search.addEventListener('focus', () => {
+                if (f.ohneOeffnen) { f.ohneOeffnen = false; return; }   // Escape: Fokus zurück, Liste bleibt zu
+                filters.forEach(other => { if (other !== f) open(other, false); });
+                open(f, true);
+            });
+            f.search.addEventListener('input', () => {
+                nurZiffern(f.search);
+                suchen(f);
+                filters.forEach(other => { if (other !== f) open(other, false); });   // immer nur eine Liste offen
+                open(f, true);
+            });
+        }
         f.items.forEach(i => i.addEventListener('change', apply));
-        f.box.querySelector('[id$=All]').addEventListener('click', () => { f.items.forEach(i => { i.checked = true; }); apply(); });
-        f.box.querySelector('[id$=None]').addEventListener('click', () => { f.items.forEach(i => { i.checked = false; }); apply(); });
+        // "Alle" gibt es nicht bei jeder Liste (beim Status nicht)
+        const alle = f.box.querySelector('[id$=All]');
+        if (alle) alle.addEventListener('click', () => {
+            if (f.zusatz) {
+                // Zusatz-Listen: Auswahl zurücksetzen - keine Haken, Suche leer, die Tabelle zeigt alle Zeilen
+                f.items.forEach(i => { i.checked = false; });
+                if (f.search) f.search.value = '';
+                suchen(f);
+            } else {
+                sichtbareItems(f).forEach(i => { i.checked = true; });
+            }
+            apply();
+        });
+    });
+
+    // Dropdown einer Spalte (Sperrflag, Rechnungszeit). Die Liste liegt fest über der Seite (position: fixed) - im scrollenden
+    // Tabellenbereich würde sie sonst bei wenigen Zeilen abgeschnitten.
+    function comboOpen(c, show) {
+        if (!c.panel) return;
+        if (show) {
+            const rect = c.combo.getBoundingClientRect();
+            c.panel.style.top = (rect.bottom + 2) + 'px';
+            c.panel.style.left = rect.left + 'px';
+            c.panel.style.minWidth = rect.width + 'px';
+        } else if (!c.panel.hidden) {
+            // Beim Schließen den Suchtext leeren - das Feld zeigt dann wieder die Auswahl
+            c.input.value = '';
+            comboSuchen(c, '');
+        }
+        c.panel.hidden = !show;
+        c.toggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+    }
+
+    // Liste nach dem Suchtext einschränken. Ohne Argument: der Text im Feld (beim Tippen);
+    // beim Öffnen wird '' übergeben - dann stehen immer alle Werte zur Wahl, auch wenn schon einer gewählt ist
+    function comboSuchen(c, text) {
+        const query = (text === undefined ? c.input.value : text).trim().toLowerCase();
+        let treffer = 0;
+        c.options.forEach(o => {
+            // "Alle" steht immer oben in der Liste
+            const zeigen = o.dataset.value === '' || query === '' || query === 'alle' || o.textContent.trim().toLowerCase().indexOf(query) >= 0;
+            o.hidden = !zeigen;
+            if (zeigen && o.dataset.value !== '') treffer++;
+        });
+        if (c.leer) c.leer.hidden = treffer > 0 || query === '' || query === 'alle';
+    }
+
+    const combos = columns.filter(c => c.combo);
+    combos.forEach(c => {
+        c.input.addEventListener('focus', () => {
+            c.input.value = '';
+            comboSuchen(c, '');
+            comboOpen(c, true);
+        });
+        c.input.addEventListener('input', () => { comboSuchen(c); comboOpen(c, true); });
+        c.toggle.addEventListener('click', () => {
+            const show = c.panel.hidden;
+            comboOpen(c, show);
+            if (show) { comboSuchen(c, ''); c.input.focus(); }
+        });
+        // Häkchen: die Liste bleibt offen, damit weitere Werte dazugenommen werden können
+        c.options.forEach(o => o.addEventListener('mousedown', e => e.preventDefault()));   // Fokus bleibt im Feld
+        c.items.forEach(i => i.addEventListener('change', apply));
+        // "Alle": alle Haken entfernen - die Tabelle zeigt wieder alle Zeilen
+        if (c.alle) c.alle.addEventListener('mousedown', () => {
+            c.items.forEach(i => { i.checked = false; });
+            comboOpen(c, false);
+            apply();
+        });
+    });
+    // Beim Scrollen des Tabellenbereichs oder Ändern der Fenstergröße passt die feste Position nicht mehr: Liste schließen.
+    // Ausnahme: das Zurückscrollen nach einer Filteränderung (apply) - die Kopfzeile mit der Liste bleibt dabei stehen.
+    if (wrap) wrap.addEventListener('scroll', () => {
+        if (eigenesScrollen) { eigenesScrollen = false; return; }
+        combos.forEach(c => comboOpen(c, false));
+    });
+    window.addEventListener('resize', () => combos.forEach(c => comboOpen(c, false)));
+
+    // Suchfelder PA, Kunden-Nr., Kunde filtern beim Tippen die Tabelle (bei den Dropdowns sucht das Tippen nur in der Liste)
+    columns.filter(c => !c.combo).forEach(c => {
+        c.input.addEventListener('input', () => { nurZiffern(c.input); apply(); });
     });
 
     // Klick außerhalb oder Escape schließt die offene Liste
     document.addEventListener('click', e => {
-        filters.forEach(f => { if (!f.panel.hidden && !f.panel.contains(e.target) && !f.toggle.contains(e.target)) open(f, false); });
+        filters.forEach(f => { if (!f.panel.hidden && !f.box.contains(e.target)) open(f, false); });
+        combos.forEach(c => { if (!c.panel.hidden && !c.combo.contains(e.target)) comboOpen(c, false); });
     });
     document.addEventListener('keydown', e => {
         if (e.key !== 'Escape') return;
-        filters.forEach(f => { if (!f.panel.hidden) { open(f, false); f.toggle.focus(); } });
+        combos.forEach(c => comboOpen(c, false));
+        filters.forEach(f => {
+            if (f.panel.hidden) return;
+            open(f, false);
+            if (f.search) { f.ohneOeffnen = document.activeElement !== f.search; f.search.focus(); } else f.toggle.focus();
+        });
     });
 
     apply();
@@ -232,7 +439,8 @@ const WipConfirm = (function () {
         panel.appendChild(div);
     }
 
-    function fill(detail) {
+    // still = true: ohne Fortschritts-Popup (Nachladen während des Exports, siehe wip:positionen-veraltet)
+    function fill(detail, still) {
         if (detail.dataset.loaded || detail.dataset.loading) return;
         const pa = detail.dataset.pa;
         if (!pa) {
@@ -242,7 +450,7 @@ const WipConfirm = (function () {
 
         detail.dataset.loading = '1';
         message(detail, 'Positionen werden geladen …');
-        WipProgress.show('Positionen von PA ' + pa + ' werden geladen …');
+        if (!still) WipProgress.show('Positionen von PA ' + pa + ' werden geladen …');
 
         fetch(url + '?pa=' + encodeURIComponent(pa), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(response => {
@@ -264,7 +472,7 @@ const WipConfirm = (function () {
             .catch(error => message(detail, error.message))   // ohne "loaded": beim nächsten Aufklappen erneut versuchen
             .then(() => {
                 delete detail.dataset.loading;
-                WipProgress.hide();   // Popup schließen - nach Erfolg und nach Fehler
+                if (!still) WipProgress.hide();   // Popup schließen - nach Erfolg und nach Fehler
             });
     }
 
@@ -280,6 +488,16 @@ const WipConfirm = (function () {
             if (open) fill(detail);
         });
     });
+
+    // Nach der Übergabe eines PA an Sage sind seine gespeicherten Positionen veraltet (Status, Meldung und
+    // OfficeLineHandle aus SagePos): beim nächsten Aufklappen neu laden - ist die Zeile gerade offen, sofort.
+    document.addEventListener('wip:positionen-veraltet', e => {
+        document.querySelectorAll('tr.detail-row').forEach(detail => {
+            if (detail.dataset.pa !== String(e.detail)) return;
+            delete detail.dataset.loaded;
+            if (!detail.hidden) fill(detail, true);
+        });
+    });
 })();
 // Meldungs-Popup: OK-Button oder Escape schließt es.
 // Kommt entweder fertig vom Server (id="messageDialog") oder wird per WipMessage.show() erzeugt.
@@ -290,7 +508,8 @@ const WipMessage = (function () {
         document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
     }
 
-    function show(message) {
+    // wide = true: breiteres Popup (Ergebnis des Exports mit langer Liste)
+    function show(message, wide) {
         const old = document.getElementById('messageDialog');
         if (old) old.parentNode.removeChild(old);
 
@@ -298,7 +517,7 @@ const WipMessage = (function () {
         dialog.className = 'dialog-backdrop';
         dialog.id = 'messageDialog';
         dialog.innerHTML =
-            '<div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="messageTitle" aria-describedby="messageText">' +
+            '<div class="dialog' + (wide ? ' dialog-wide' : '') + '" role="alertdialog" aria-modal="true" aria-labelledby="messageTitle" aria-describedby="messageText">' +
             '<h2 id="messageTitle" class="dialog-title">Hinweis</h2>' +
             '<p id="messageText" class="dialog-message"></p>' +
             '<div class="dialog-actions"><button type="button" class="btn btn-primary" data-dialog-close>OK</button></div>' +
@@ -315,8 +534,9 @@ const WipMessage = (function () {
     return { show: show };
 })();
 
-// Export an Sage mit echtem Fortschritt: erst vorbereiten (Ordner prüfen, Positionen laden),
-// dann je PA ein Aufruf, der eine XML-Datei schreibt. Der Balken zeigt "PA x von n".
+// Export an Sage mit echtem Fortschritt: erst vorbereiten (Adresse der Sage-Schnittstelle prüfen),
+// dann je PA ein Aufruf, der den Auftrag an Sage sendet. Der Balken zeigt "PA x von n".
+// Am Ende fasst ein Meldungs-Popup zusammen, was übergeben, abgelehnt oder ohne Antwort geblieben ist.
 (function () {
     const form = document.getElementById('exportForm');
     if (!form || !window.fetch) return;   // ohne fetch bleibt es beim normalen Absenden des Formulars
@@ -324,6 +544,7 @@ const WipMessage = (function () {
     function post(url, fields) {
         const body = new URLSearchParams();
         body.append('__RequestVerificationToken', form.querySelector('input[name=__RequestVerificationToken]').value);
+        body.append('Seite', form.querySelector('input[name=Seite]').value);   // Kennung dieser Seite für die Sperren
         fields.forEach(f => body.append(f[0], f[1]));
         return fetch(url, { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(response => {
@@ -338,60 +559,73 @@ const WipMessage = (function () {
             });
     }
 
-    // Ergebnis des Exports als Akkordeon über der Tabelle: Kopfzeile mit der Zusammenfassung,
-    // darunter je erzeugter XML-Datei eine Zeile. Nach dem Export ist es aufgeklappt.
-    function showResult(folder, files, skipped, aborted) {
-        let result = document.getElementById('exportStatus');
-        if (result) result.parentNode.removeChild(result);
+    // Zusammenfassung für das Meldungs-Popup (gleicher Text wie WipPaController.Zusammenfassung).
+    // Gleiche Meldungen stehen nur einmal, dahinter die PAs - bei Hunderten PAs bleibt die Liste lesbar.
+    function summary(steps) {
+        const uebergeben = steps.filter(s => s.ergebnis === 'Uebergeben');
+        const zeilen = [uebergeben.length + ' PA(s) an Sage übergeben.'];
+        // Je übergebenem PA die OfficeLineHandle des Auftrags und die OfficeLineVorgangsHandle aus der Antwort von Sage
+        uebergeben.forEach(s => zeilen.push('PA ' + s.pa + ': OfficeLineHandle ' + (s.officeLineHandle || '-') +
+            ', Vorgang ' + (s.officeLineVorgangsHandle || '-') + (s.meldung ? ' (' + s.meldung + ')' : '')));
+        function block(titel, ergebnis) {
+            const liste = steps.filter(s => s.ergebnis === ergebnis);
+            if (liste.length === 0) return;
+            const gruppen = new Map();
+            liste.forEach(s => {
+                // Zeilenumbrüche zusammenziehen, führende Satzzeichen weg (Sage liefert z. B. ", Fehler in ...")
+                const text = (s.meldung || '').replace(/\s+/g, ' ').replace(/^[\s,;:\-]+/, '').trim();
+                if (!gruppen.has(text)) gruppen.set(text, []);
+                gruppen.get(text).push(s.pa);
+            });
+            zeilen.push('', titel + ' (' + liste.length + '):');
+            // Je Meldung: "• Meldung" und darunter die PAs
+            gruppen.forEach((pas, text) => { if (text) zeilen.push('• ' + text); zeilen.push('PA ' + pas.join(', ')); });
+        }
+        block('Von Sage abgelehnt', 'Abgelehnt');
+        block('Nicht übergeben', 'NichtUebergeben');
+        block('Keine Antwort von Sage', 'KeineAntwort');
+        block('Keine abrechenbaren Positionen, nicht übergeben', 'KeinePositionen');
+        return zeilen.join('\n');
+    }
 
-        result = document.createElement('details');
-        result.id = 'exportStatus';
-        result.className = 'export-result';
-        result.open = true;
+    function rowsOf(pa) {
+        return Array.from(document.querySelectorAll('tr.pa-row')).filter(row => row.dataset.pa === String(pa));
+    }
 
-        const summary = document.createElement('summary');
-        summary.textContent = files.length + ' XML-Datei(en) für Sage geschrieben nach ' + folder +
-            (aborted ? ' - der Export wurde danach abgebrochen' : '');
-        result.appendChild(summary);
-
-        const list = document.createElement('ul');
-        files.forEach(file => {
-            const item = document.createElement('li');
-            item.textContent = file;
-            list.appendChild(item);
-        });
-        skipped.forEach(pa => {
-            const item = document.createElement('li');
-            item.className = 'skipped';
-            item.textContent = 'PA ' + pa + ': keine abrechenbaren Positionen, nicht exportiert';
-            list.appendChild(item);
-        });
-        result.appendChild(list);
-
-        form.parentNode.insertBefore(result, form);
+    // Zeile unter dem Status-Abzeichen: Status und Meldung von Sage (wie nach dem Neu laden)
+    function setRueckmeldung(cell, text, fehler) {
+        let line = cell.querySelector('.sage-rueckmeldung');
+        if (!line) {
+            line = document.createElement('div');
+            cell.appendChild(line);
+        }
+        line.className = 'sage-rueckmeldung' + (fehler ? ' sage-fehler' : '');
+        line.title = 'Status und Meldung von Sage (SageHDR)';
+        line.textContent = text;
     }
 
     // Übergebene PAs sofort als "übergeben" kennzeichnen - wie nach dem Neu laden. Der Haken bleibt anklickbar
-    // (data-uebergeben): er fragt nach, ob die Datei noch einmal erstellt werden soll.
-    function markExported(pa, file) {
+    // (data-uebergeben): er fragt nach, ob der PA noch einmal an Sage übergeben werden soll.
+    // rueckmeldung: Zeile wie nach dem Neu laden ("Alles ok in Sage" bzw. "XML erzeugt: <Hinweis>"), handle: OfficeLineHandle
+    function markExported(pa, handle, vorgang, rueckmeldung, fehler) {
         const now = new Date();
         const two = n => (n < 10 ? '0' : '') + n;
         const user = document.querySelector('.app-user');
         // Zwei Zeilen wie nach dem Neu laden: "übergeben am ..." und darunter "von ..."
         const zeilen = ['übergeben am ' + two(now.getDate()) + '.' + two(now.getMonth() + 1) + '.' + now.getFullYear() + ' ' + two(now.getHours()) + ':' + two(now.getMinutes())];
         if (user && user.textContent.trim()) zeilen.push('von ' + user.textContent.trim());
-        document.querySelectorAll('tr.pa-row').forEach(row => {
-            if (row.dataset.pa !== String(pa)) return;
+        rowsOf(pa).forEach(row => {
             const box = row.querySelector('input.row-select');
             box.checked = false;
             box.disabled = false;
             box.dataset.uebergeben = '1';
-            box.title = 'Haken setzen, um die XML-Datei noch einmal zu erstellen';
+            box.title = 'Haken setzen, um den PA noch einmal an Sage zu übergeben';
+            row.classList.remove('selected');
             row.classList.add('is-exported');
             const cell = row.querySelector('.col-status');
             cell.innerHTML = '<span class="status status-exported"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.5l5 5L19.5 7" /></svg></span>';
             const badge = cell.firstChild;
-            badge.title = file;
+
             const textBox = document.createElement('span');
             textBox.className = 'status-text';
             zeilen.forEach(z => {
@@ -400,42 +634,70 @@ const WipMessage = (function () {
                 textBox.appendChild(zeile);
             });
             badge.appendChild(textBox);
+            if (rueckmeldung) setRueckmeldung(cell, rueckmeldung, fehler);
+            document.dispatchEvent(new CustomEvent('wip:positionen-veraltet', { detail: pa }));
+            if (handle) {
+                const line = document.createElement('div');
+                line.className = 'sage-handle';
+                line.title = 'OfficeLineHandle des Auftrags / OfficeLineVorgangsHandle des Vorgangs in Sage (SageHDR)';
+                line.textContent = 'Sage-Handle ' + handle + (vorgang ? ' / Vorgang ' + vorgang : '');
+                cell.appendChild(line);
+            }
         });
         document.dispatchEvent(new Event('wip:filter'));   // Zähler "ausgewählt" nachziehen
         const submit = form.querySelector('.actions button[type=submit]');
-        if (submit && !form.querySelector('input.row-select:not(:disabled):not([data-uebergeben])')) submit.disabled = true;
+        // data-uebergeben über dataset prüfen: Razor schreibt bei nicht übergebenen Zeilen ein leeres Attribut
+        // (data-uebergeben=""), ein CSS-Selektor [data-uebergeben] würde also jede Zeile treffen
+        const nochFrei = Array.from(form.querySelectorAll('input.row-select:not(:disabled)')).some(b => !b.dataset.uebergeben);
+        if (submit && !nochFrei) submit.disabled = true;
+    }
+
+    // Von Sage abgelehnt oder übersprungen: der PA bleibt übergebbar, wird aber abgehakt und zeigt die Meldung
+    function markRejected(pa, text) {
+        rowsOf(pa).forEach(row => {
+            row.querySelector('input.row-select').checked = false;
+            row.classList.remove('selected');
+            setRueckmeldung(row.querySelector('.col-status'), text, true);
+            document.dispatchEvent(new CustomEvent('wip:positionen-veraltet', { detail: pa }));
+        });
+        document.dispatchEvent(new Event('wip:filter'));
     }
 
     async function run(pas) {
-        const files = [], skipped = [];
-        let folder = '';
+        const steps = [];
         try {
             WipProgress.show('Export wird vorbereitet …');
             const start = await post(form.dataset.exportStartUrl, pas.map(pa => ['pas', pa]));
-            folder = start.folder;
 
             for (let i = 0; i < start.pas.length; i++) {
                 const pa = start.pas[i];
                 WipProgress.show('PA ' + pa + ' wird an Sage übergeben (' + (i + 1) + ' von ' + start.pas.length + ') …', i, start.pas.length);
                 const step = await post(form.dataset.exportStepUrl, [['exportId', start.exportId], ['pa', pa]]);
-                if (step.file) { files.push(step.file); markExported(pa, step.file); } else skipped.push(pa);
+                step.pa = pa;
+                steps.push(step);
+                // Status für den Status-Filter nachziehen (2 = Alles ok, 3 = Fehler in Sage, 1 = XML erzeugt: nicht filterbar).
+                // Ausgeblendet wird erst bei der nächsten Änderung eines Filters - die Zeile springt nicht während des Exports weg.
+                const status = { Uebergeben: '2', Abgelehnt: '3', KeineAntwort: '' }[step.ergebnis];
+                if (status !== undefined) rowsOf(pa).forEach(row => { row.dataset.status = status; });
+                if (step.ergebnis === 'Uebergeben') markExported(pa, step.officeLineHandle, step.officeLineVorgangsHandle, 'Alles ok in Sage' + (step.meldung ? ': ' + step.meldung : ''), false);
+                else if (step.ergebnis === 'KeineAntwort') markExported(pa, null, null, 'XML erzeugt: ' + step.meldung, true);
+                else if (step.ergebnis === 'Abgelehnt') markRejected(pa, 'Fehler in Sage: ' + step.meldung);
+                else if (step.ergebnis === 'NichtUebergeben') markRejected(pa, 'Nicht übergeben: ' + step.meldung);
             }
             WipProgress.show('Export abgeschlossen.', start.pas.length, start.pas.length);
         } catch (error) {
             WipProgress.hide();
-            const done = files.length ? '\n\nBereits geschrieben: ' + files.join(', ') : '';
-            WipMessage.show(error.message + done);
-            if (files.length) showResult(folder, files, skipped, true);
+            WipMessage.show(error.message + (steps.length ? '\n\nBis dahin:\n' + summary(steps) : ''), steps.length > 0);
             return;
         }
 
         WipProgress.hide();
-        showResult(folder, files, skipped, false);
+        WipMessage.show(summary(steps), true);
     }
 
     form.addEventListener('submit', e => {
         e.preventDefault();
-        // Nur angehakte Zeilen, die die Filter (PAs, Kunden) gerade anzeigen
+        // Nur angehakte Zeilen, die die Filter (PAs, Kunden, Status) gerade anzeigen
         const pas = Array.from(form.querySelectorAll('input.row-select:checked'))
             .filter(box => !box.closest('tr').hidden && !box.dataset.uebergeben)
             .map(box => box.closest('td').querySelector('input[type=hidden][name$=".PA"]'))
@@ -450,11 +712,10 @@ const WipMessage = (function () {
 })();
 
 // Neu erstellen: Bei einem schon übergebenen PA, den kein anderer Benutzer sperrt, bleibt der Haken aktiv
-// (data-uebergeben). Beim Anhaken fragt ein Popup mit OK und Abbrechen, ob die Datei noch einmal erstellt werden soll.
+// (data-uebergeben). Beim Anhaken fragt ein Popup mit OK und Abbrechen, ob der PA noch einmal an Sage übergeben werden soll.
 // - Abbrechen: der Haken wird wieder entfernt, es passiert nichts.
-// - OK: der Server setzt SageHDR.Datei und DateiErstelltAm auf NULL, löscht die alte XML-Datei aus dem Export-Ordner
-//   (falls sie noch dort liegt) und sperrt den Satz für diesen Benutzer. Die Zeile ist danach ein ganz normaler,
-//   angehakter PA und wird mit "An Sage übergeben" neu erzeugt.
+// - OK: der Server setzt SageHDR.Status auf "neu" und sperrt den Satz für diesen Benutzer.
+//   Die Zeile ist danach ein ganz normaler, angehakter PA und wird mit "An Sage übergeben" erneut gesendet.
 (function () {
     const form = document.getElementById('exportForm');
     const url = form && form.dataset.neuErstellenUrl;
@@ -463,6 +724,7 @@ const WipMessage = (function () {
     function post(pa) {
         const body = new URLSearchParams();
         body.append('__RequestVerificationToken', form.querySelector('input[name=__RequestVerificationToken]').value);
+        body.append('Seite', form.querySelector('input[name=Seite]').value);   // Kennung dieser Seite für die Sperren
         body.append('pa', pa);
         return fetch(url, { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(response => {
@@ -483,6 +745,7 @@ const WipMessage = (function () {
         box.removeAttribute('title');
         box.checked = true;
         row.classList.remove('is-exported');
+        row.dataset.status = '0';   // wieder "neu" (Status-Filter)
         row.querySelector('.col-status').innerHTML = '';
         const submit = form.querySelector('.actions button[type=submit]');
         if (submit) submit.disabled = false;
@@ -496,14 +759,14 @@ const WipMessage = (function () {
             const row = box.closest('tr');
             const pa = row.dataset.pa;
             const status = row.querySelector('.status-exported');
-            const datei = status && status.title ? '\n\nDatei: ' + status.title : '';
+
             const wann = status ? status.textContent.replace(/\s+/g, ' ').trim() : 'übergeben';
 
             box.disabled = true;   // keine zweite Rückfrage, während die erste läuft
             const confirmed = await WipConfirm.ask(
-                'Für PA ' + pa + ' wurde bereits eine XML-Datei erstellt (' + wann + ').' + datei +
-                '\n\nSoll die Datei noch einmal erstellt werden?\nMit OK wird die alte Datei im Export-Ordner gelöscht ' +
-                '(falls sie noch dort liegt) und der PA für Sie gesperrt.');
+                'PA ' + pa + ' wurde bereits an Sage übergeben (' + wann + ').' +
+                '\n\nSoll der PA noch einmal an Sage übergeben werden?\nBitte vorher in Sage prüfen, dass der Auftrag dort nicht ' +
+                'schon angelegt ist. Mit OK wird der PA für Sie gesperrt und kann erneut übergeben werden.');
             box.disabled = false;
 
             if (!confirmed) {
@@ -514,7 +777,7 @@ const WipMessage = (function () {
 
             try {
                 box.disabled = true;
-                WipProgress.show('PA ' + pa + ' wird zum erneuten Erstellen freigegeben …');
+                WipProgress.show('PA ' + pa + ' wird zur erneuten Übergabe freigegeben …');
                 await post(pa);
                 release(row, box);
             } catch (error) {
@@ -529,19 +792,23 @@ const WipMessage = (function () {
 })();
 
 // Sperren der PAs in SageHDR: solange die Seite offen ist, jede Minute verlängern.
-// Beim Schließen des Browsers oder Tabs (und beim Wechsel zur Hauptseite) werden sie aus SageHDR gelöscht;
-// beim Neu laden innerhalb der App nicht. Kommt die Freigabe nicht an (Absturz), laufen sie nach
+// Beim Verlassen der Seite (Schließen, F5, Wechsel zur Hauptseite) werden die Sperren dieser Seite aus SageHDR
+// gelöscht - nur ihre eigenen (Kennung "Seite"): eine schon neu geladene Seite hat ihre PAs mit einer neuen
+// Kennung gesperrt und behält sie, auch wenn die Freigabe erst danach ankommt. Kommt die Freigabe nicht an (Absturz), laufen sie nach
 // 3 Minuten ab (SageSperre.Minuten) und werden beim nächsten Laden bzw. Verlängern gelöscht.
 (function () {
     const table = document.querySelector('table.grid');
     const verlaengernUrl = table && table.dataset.sperreVerlaengernUrl;
     const freigebenUrl = table && table.dataset.sperreFreigebenUrl;
     const tokenInput = document.querySelector('#exportForm input[name=__RequestVerificationToken]');
+    const seiteInput = document.querySelector('#exportForm input[name=Seite]');
     if (!verlaengernUrl || !freigebenUrl || !tokenInput) return;   // nicht angemeldet oder ohne Berechtigung
 
     function formData() {
         const data = new FormData();
         data.append('__RequestVerificationToken', tokenInput.value);
+        // Kennung dieser Seite: die Freigabe löscht nur ihre Sperren, nicht die einer schon neu geladenen Seite (F5)
+        if (seiteInput) data.append('Seite', seiteInput.value);
         return data;
     }
 

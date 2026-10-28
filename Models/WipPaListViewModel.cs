@@ -7,13 +7,16 @@ namespace WipSageWeb.Models
     {
         public List<WipPa> Rows { get; set; } = new List<WipPa>();
 
-        /// <summary>Ergebnis des letzten Exports (erzeugte XML-Dateien) - wird als aufgeklapptes Akkordeon gezeigt.</summary>
-        public WipSageWeb.Data.SageExportResult ExportResult { get; set; }
+        /// <summary>
+        /// Kennung dieser geöffneten Seite für die Sperren in SageHDR (SperrKennung). Die Seite schickt sie bei jedem
+        /// Aufruf mit, damit die Freigabe beim Verlassen nur ihre eigenen Sperren löscht.
+        /// </summary>
+        public string Seite { get; set; }
 
         /// <summary>Fehler beim Laden der Daten (z. B. keine DB-Verbindung).</summary>
         public string ErrorMessage { get; set; }
 
-        /// <summary>Meldung, die als Popup über der Seite erscheint (z. B. kein gültiger Export-Ordner).</summary>
+        /// <summary>Meldung, die als Popup über der Seite erscheint (z. B. Ergebnis des Exports, keine gültige Sage-Adresse).</summary>
         public string PopupMessage { get; set; }
 
         /// <summary>Solange false, zeigt die View das Anmelde-Popup und lädt keine Daten.</summary>

@@ -53,7 +53,8 @@ namespace WipSageWeb.Controllers
                 return View(new WipPaListViewModel { IsLoggedIn = true, PopupMessage = NoPermissionMessage });
             }
 
-            var model = await LoadAsync(user, cancellationToken);
+            // Jedes Laden der Seite bekommt eine eigene Kennung für die Sperren (siehe SperrKennung)
+            var model = await LoadAsync(user, SperrKennung.Neu(), cancellationToken);
             return View(model);
         }
 
@@ -154,7 +155,7 @@ namespace WipSageWeb.Controllers
             }
 
             // Neue Kennung je Anmeldung: Abmelden hebt nur die Sperren dieser Anmeldung auf
-            user.Sitzung = Guid.NewGuid().ToString("N");
+            user.Sitzung = SperrKennung.Neu();
             HttpContext.Session.SetLoginUser(user);
             if (!user.SageFaktur)
             {
@@ -170,7 +171,8 @@ namespace WipSageWeb.Controllers
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> Logout(CancellationToken cancellationToken)
         {
-            await SperrenFreigebenAsync(HttpContext.Session.GetLoginUser(), cancellationToken);
+            // Abmelden: Sperren aller Seiten dieser Anmeldung freigeben
+            await SperrenFreigebenAsync(HttpContext.Session.GetLoginUser(), null, true, cancellationToken);
             HttpContext.Session.Clear();
             if (HasReturnUrl)
             {
@@ -182,31 +184,36 @@ namespace WipSageWeb.Controllers
         // POST /WipPa/SperreVerlaengern - die offene Seite meldet sich alle 5 Minuten, damit ihre Sperren nicht ablaufen
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> SperreVerlaengern(CancellationToken cancellationToken)
+        public async Task<IActionResult> SperreVerlaengern(string seite, CancellationToken cancellationToken)
         {
             var denied = DenyUnlessAuthorized(out var user);
             if (denied != null)
             {
                 return denied;
             }
-            var anzahl = await _repository.SperrenVerlaengernAsync(EnsureSitzung(user).AlsSperrInhaber(), cancellationToken);
+            var anzahl = await _repository.SperrenVerlaengernAsync(Inhaber(user, seite), cancellationToken);
             return Json(new { ok = true, anzahl });
         }
 
-        // POST /WipPa/SperreFreigeben - beim Schließen der Seite (navigator.sendBeacon)
+        // POST /WipPa/SperreFreigeben - beim Verlassen der Seite (navigator.sendBeacon). Gibt nur die Sperren dieser
+        // Seite frei: Bei F5 hat die neu geladene Seite ihre PAs schon mit einer neuen Kennung gesperrt, und die
+        // Freigabe der alten Seite - die auch erst danach ankommen kann - lässt diese Sperren in Ruhe.
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> SperreFreigeben(CancellationToken cancellationToken)
+        public async Task<IActionResult> SperreFreigeben(string seite, CancellationToken cancellationToken)
         {
-            await SperrenFreigebenAsync(HttpContext.Session.GetLoginUser(), cancellationToken);
+            if (SperrKennung.IstGueltig(seite))
+            {
+                await SperrenFreigebenAsync(HttpContext.Session.GetLoginUser(), seite, false, cancellationToken);
+            }
             return NoContent();
         }
 
         // POST /WipPa/ExportStart - Schritt 1 des Exports mit Fortschrittsanzeige:
-        // Ordner prüfen und Positionen laden. Der vorbereitete Export liegt 15 Minuten im Speicher des Servers.
+        // Adresse der Sage-Schnittstelle prüfen, PAs festlegen. Der vorbereitete Export liegt 15 Minuten im Speicher des Servers.
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> ExportStart(int[] pas, CancellationToken cancellationToken)
+        public async Task<IActionResult> ExportStart(int[] pas, string seite, CancellationToken cancellationToken)
         {
             var denied = DenyUnlessAuthorized(out var user);
             if (denied != null)
@@ -220,10 +227,10 @@ namespace WipSageWeb.Controllers
 
             try
             {
-                var job = await _exportService.PrepareAsync(pas, EnsureSitzung(user).AlsSperrInhaber(), cancellationToken);
+                var job = await _exportService.PrepareAsync(pas, Inhaber(user, seite), cancellationToken);
                 var exportId = Guid.NewGuid().ToString("N");
                 _cache.Set(ExportCacheKey(user, exportId), job, TimeSpan.FromMinutes(15));
-                return Json(new { ok = true, exportId, folder = job.Folder, pas = job.PAs });
+                return Json(new { ok = true, exportId, pas = job.PAs });
             }
             catch (SageExportException ex)
             {
@@ -237,7 +244,7 @@ namespace WipSageWeb.Controllers
             }
         }
 
-        // POST /WipPa/ExportStep - Schritt 2, je PA einmal: schreibt eine XML-Datei
+        // POST /WipPa/ExportStep - Schritt 2, je PA einmal: sendet den Auftrag an Sage
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> ExportStep(string exportId, int pa, CancellationToken cancellationToken)
@@ -254,8 +261,9 @@ namespace WipSageWeb.Controllers
 
             try
             {
-                // file = null: PA ohne abrechenbare Positionen, es wurde nichts geschrieben
-                return Json(new { ok = true, file = await _exportService.ExportOneAsync(job, pa, cancellationToken) });
+                // ergebnis: Uebergeben, Abgelehnt (meldung von Sage), KeineAntwort oder KeinePositionen (nichts gesendet)
+                var schritt = await _exportService.ExportOneAsync(job, pa, cancellationToken);
+                return Json(new { ok = true, ergebnis = schritt.Ergebnis.ToString(), officeLineHandle = schritt.OfficeLineHandle, officeLineVorgangsHandle = schritt.OfficeLineVorgangsHandle, meldung = schritt.Meldung });
             }
             catch (SageExportException ex)
             {
@@ -270,11 +278,10 @@ namespace WipSageWeb.Controllers
         }
 
         // POST /WipPa/NeuErstellen - der Benutzer hat bei einem schon übergebenen PA den Haken gesetzt und die
-        // Rückfrage mit OK beantwortet: SageHDR.Datei und DateiErstelltAm werden NULL, der Satz wird für ihn
-        // gesperrt, und die alte XML-Datei wird - falls sie noch im Export-Ordner liegt - gelöscht.
+        // Rückfrage mit OK beantwortet: SageHDR.Status wird "neu", der Satz wird für ihn gesperrt.
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public async Task<IActionResult> NeuErstellen(int pa, CancellationToken cancellationToken)
+        public async Task<IActionResult> NeuErstellen(int pa, string seite, CancellationToken cancellationToken)
         {
             var denied = DenyUnlessAuthorized(out var user);
             if (denied != null)
@@ -284,9 +291,9 @@ namespace WipSageWeb.Controllers
 
             try
             {
-                var geloescht = await _exportService.NeuErstellenAsync(pa, EnsureSitzung(user).AlsSperrInhaber(), cancellationToken);
-                _logger.LogInformation("PA {PA} zum erneuten Erstellen freigegeben von {User}; gelöschte Datei: {Datei}", pa, user.UserNr, geloescht ?? "(keine)");
-                return Json(new { ok = true, geloescht });
+                await _exportService.NeuErstellenAsync(pa, Inhaber(user, seite), cancellationToken);
+                _logger.LogInformation("PA {PA} zur erneuten Übergabe freigegeben von {User}", pa, user.UserNr);
+                return Json(new { ok = true });
             }
             catch (SageExportException ex)
             {
@@ -321,9 +328,8 @@ namespace WipSageWeb.Controllers
                 .Select(r => r.PA.Value)
                 .ToHashSet();
 
-            // Export: je ausgewähltem PA eine XML-Datei in Konfig.SageExportOrdner
+            // Export: je ausgewähltem PA ein Auftrag an die Sage-Schnittstelle (Konfig.SageTestExportURL bzw. SageReleaseExportURL)
             string popupMessage = null, errorMessage = null;
-            SageExportResult exportResult = null;
             if (selectedPAs.Count == 0)
             {
                 popupMessage = "Es wurde kein PA ausgewählt.";
@@ -332,7 +338,8 @@ namespace WipSageWeb.Controllers
             {
                 try
                 {
-                    exportResult = await _exportService.ExportAsync(selectedPAs, EnsureSitzung(user).AlsSperrInhaber(), cancellationToken);
+                    var exportResult = await _exportService.ExportAsync(selectedPAs, Inhaber(user, posted.Seite), cancellationToken);
+                    popupMessage = Zusammenfassung(exportResult.Schritte);
                 }
                 catch (SageExportException ex)
                 {
@@ -346,18 +353,54 @@ namespace WipSageWeb.Controllers
                 }
             }
 
-            var model = await LoadAsync(user, cancellationToken);
+            var model = await LoadAsync(user, SperrKennung.Neu(), cancellationToken);
             foreach (var row in model.Rows)
             {
                 row.IsSelected = row.Zustand == PaZustand.Bearbeitbar && row.PA.HasValue && selectedPAs.Contains(row.PA.Value);
             }
-            model.ExportResult = exportResult;
             model.PopupMessage = popupMessage;
             model.ErrorMessage = errorMessage ?? model.ErrorMessage;
 
             // Sonst würden die geposteten Werte (per Index) die neu geladenen Zeilen überschreiben
             ModelState.Clear();
             return View(nameof(Index), model);
+        }
+
+        // Ergebnis des Exports für das Meldungs-Popup (wie wippa.js es nach dem Export zeigt)
+        private static string Zusammenfassung(IEnumerable<SageExportSchritt> schritte)
+        {
+            // Gleiche Meldungen stehen nur einmal, dahinter die PAs - bei Hunderten PAs bleibt die Liste lesbar
+            var liste = schritte.ToList();
+            var uebergeben = liste.Where(s => s.Ergebnis == SageExportErgebnis.Uebergeben).ToList();
+            var zeilen = new List<string> { $"{uebergeben.Count} PA(s) an Sage übergeben." };
+            // Je übergebenem PA die OfficeLineHandle des Auftrags und die OfficeLineVorgangsHandle aus der Antwort von Sage
+            zeilen.AddRange(uebergeben.Select(s => $"PA {s.PA}: OfficeLineHandle {s.OfficeLineHandle?.ToString() ?? "-"}, Vorgang {s.OfficeLineVorgangsHandle?.ToString() ?? "-"}"
+                + (string.IsNullOrWhiteSpace(s.Meldung) ? "" : $" ({s.Meldung})")));
+            void Block(string titel, SageExportErgebnis ergebnis)
+            {
+                var teil = liste.Where(s => s.Ergebnis == ergebnis).ToList();
+                if (teil.Count == 0)
+                {
+                    return;
+                }
+                zeilen.Add("");
+                zeilen.Add($"{titel} ({teil.Count}):");
+                // Zeilenumbrüche zusammenziehen, führende Satzzeichen weg (Sage liefert z. B. ", Fehler in ...")
+                foreach (var gruppe in teil.GroupBy(s => System.Text.RegularExpressions.Regex.Replace(s.Meldung ?? "", @"\s+", " ").TrimStart(' ', ',', ';', ':', '-').Trim()))
+                {
+                    // Je Meldung: "• Meldung" und darunter die PAs
+                    if (gruppe.Key.Length > 0)
+                    {
+                        zeilen.Add("• " + gruppe.Key);
+                    }
+                    zeilen.Add("PA " + string.Join(", ", gruppe.Select(s => s.PA)));
+                }
+            }
+            Block("Von Sage abgelehnt", SageExportErgebnis.Abgelehnt);
+            Block("Nicht übergeben", SageExportErgebnis.NichtUebergeben);
+            Block("Keine Antwort von Sage", SageExportErgebnis.KeineAntwort);
+            Block("Keine abrechenbaren Positionen, nicht übergeben", SageExportErgebnis.KeinePositionen);
+            return string.Join("\n", zeilen);
         }
 
         private bool HasReturnUrl => !string.IsNullOrWhiteSpace(_loginOptions.ReturnUrl);
@@ -376,26 +419,31 @@ namespace WipSageWeb.Controllers
             return user.SageFaktur ? null : StatusCode(403);
         }
 
-        // Ältere Anmeldungen (vor Einführung der Sperren) haben noch keine Kennung - dann jetzt vergeben
+        // Ältere Anmeldungen (ohne oder mit einer Kennung im alten, längeren Format) bekommen jetzt eine neue
         private LoginUser EnsureSitzung(LoginUser user)
         {
-            if (string.IsNullOrEmpty(user.Sitzung))
+            if (!SperrKennung.IstGueltig(user.Sitzung))
             {
-                user.Sitzung = Guid.NewGuid().ToString("N");
+                user.Sitzung = SperrKennung.Neu();
                 HttpContext.Session.SetLoginUser(user);
             }
             return user;
         }
 
-        private async Task SperrenFreigebenAsync(LoginUser user, CancellationToken cancellationToken)
+        // Sperr-Inhaber für die Seite, die den Aufruf schickt. Fehlt deren Kennung oder ist sie ungültig, gilt eine
+        // neue - die Sperren laufen dann ab bzw. werden beim Abmelden freigegeben.
+        private SperrInhaber Inhaber(LoginUser user, string seite) =>
+            EnsureSitzung(user).AlsSperrInhaber(SperrKennung.IstGueltig(seite) ? seite : SperrKennung.Neu());
+
+        private async Task SperrenFreigebenAsync(LoginUser user, string seite, bool ganzeAnmeldung, CancellationToken cancellationToken)
         {
-            if (user == null || string.IsNullOrEmpty(user.Sitzung))
+            if (user == null || !SperrKennung.IstGueltig(user.Sitzung))
             {
                 return;
             }
             try
             {
-                await _repository.SperrenFreigebenAsync(user.AlsSperrInhaber(), cancellationToken);
+                await _repository.SperrenFreigebenAsync(user.AlsSperrInhaber(seite ?? ""), ganzeAnmeldung, cancellationToken);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
@@ -404,9 +452,9 @@ namespace WipSageWeb.Controllers
             }
         }
 
-        private async Task<WipPaListViewModel> LoadAsync(LoginUser user, CancellationToken cancellationToken)
+        private async Task<WipPaListViewModel> LoadAsync(LoginUser user, string seite, CancellationToken cancellationToken)
         {
-            var model = new WipPaListViewModel { IsLoggedIn = true, IsAuthorized = true };
+            var model = new WipPaListViewModel { IsLoggedIn = true, IsAuthorized = true, Seite = seite };
             try
             {
                 model.Rows = (await _repository.GetWipPAsAsync(cancellationToken)).ToList();
@@ -419,12 +467,12 @@ namespace WipSageWeb.Controllers
             }
 
             // Jeder PA bekommt einen Eintrag in SageHDR und wird für diesen Benutzer gesperrt, wenn er frei ist.
-            // Schlägt das fehl, bleiben alle PAs nur lesbar - sonst könnten XML-Dateien doppelt entstehen.
+            // Schlägt das fehl, bleiben alle PAs nur lesbar - sonst könnten PAs doppelt an Sage gehen.
             IReadOnlyDictionary<int, SageHdrZustand> zustaende;
             try
             {
                 var pas = model.Rows.Where(r => r.PA.HasValue).Select(r => r.PA.Value);
-                zustaende = await _repository.SperrenAsync(pas, EnsureSitzung(user).AlsSperrInhaber(), cancellationToken);
+                zustaende = await _repository.SperrenAsync(pas, Inhaber(user, seite), cancellationToken);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
@@ -451,11 +499,10 @@ namespace WipSageWeb.Controllers
                     if (zustand.IstUebergeben)
                     {
                         row.Zustand = PaZustand.Uebergeben;
-                        row.Datei = zustand.Datei;
-                        row.UebergebenAm = zustand.DateiErstelltAm;
-                        row.UebergebenVon = zustand.DateiErstelltVon;
+                        row.UebergebenAm = zustand.AnSageGesendetAm;
+                        row.UebergebenVon = zustand.AnSageGesendetVon;
 
-                        // Hält ein anderer Benutzer den Satz (er erstellt die Datei gerade neu), bleibt er nur lesbar
+                        // Hält ein anderer Benutzer den Satz (er übergibt ihn gerade erneut), bleibt er nur lesbar
                         row.GesperrtFuerAndere = zustand.GesperrtFuerAndere;
                         if (zustand.GesperrtFuerAndere)
                         {

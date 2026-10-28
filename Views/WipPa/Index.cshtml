@@ -1,46 +1,130 @@
-﻿@model WipPaListViewModel
+@model WipPaListViewModel
 @{
     ViewData["Title"] = "Abzurechnende PAs";
 
-    // Filter neben der Überschrift: zwei Dropdown-Listen mit Mehrfachauswahl (PA-Nummer und Kundenname).
-    // Jeder Wert steht einmal in der Liste; PAs aufsteigend nach Nummer, Kunden alphabetisch (deutsche Sortierung).
+    // Filter neben der Überschrift: Dropdown-Listen mit Mehrfachauswahl (PA-Nummer, Kundennummer, Kundenname, Status).
+    // Jeder Wert steht einmal in der Liste; PAs und Kundennummern aufsteigend, Kunden alphabetisch (deutsche Sortierung).
+    // Value = Wert im data-Attribut der Zeile, Label = Text in der Liste
     var filterPAs = Model.Rows.Where(r => r.PA.HasValue).Select(r => r.PA.Value).Distinct().OrderBy(pa => pa)
-        .Select(pa => pa.ToString()).ToList();
+        .Select(pa => (Value: pa.ToString(), Label: pa.ToString())).ToList();
+    var filterKundenNr = Model.Rows.Where(r => r.KundeNr.HasValue).Select(r => r.KundeNr.Value).Distinct().OrderBy(nr => nr)
+        .Select(nr => (Value: nr.ToString(), Label: nr.ToString())).ToList();
     var filterKunden = Model.Rows.Select(r => (r.KundeName ?? "").Trim()).Where(name => name.Length > 0).Distinct()
-        .OrderBy(name => name, StringComparer.Create(new System.Globalization.CultureInfo("de-DE"), true)).ToList();
+        .OrderBy(name => name, StringComparer.Create(new System.Globalization.CultureInfo("de-DE"), true))
+        .Select(name => (Value: name, Label: name)).ToList();
+    // Status-Filter: wählbar sind 0 = neu, 2 = Alles ok in Sage, 3 = Fehler in Sage (Enum SageStatus).
+    // Zeilen mit 1 = XML erzeugt (gesendet, Antwort offen) haben kein data-status und werden nie ausgeblendet.
+    var filterStatus = Model.Rows.Count == 0
+        ? new List<(string Value, string Label)>()
+        : new[] { WipSageWeb.Data.SageStatus.Neu, WipSageWeb.Data.SageStatus.AllesOkInSage, WipSageWeb.Data.SageStatus.FehlerInSage }
+            .Select(s => (Value: ((byte)s).ToString(), Label: WipSageWeb.Data.SageStatusText.Text(s))).ToList();
 
-    // Id = Präfix der Element-Ids, Attr = data-Attribut der Tabellenzeile, Name = Bezeichnung im Feld
+    // Id = Präfix der Element-Ids, Attr = data-Attribut der Tabellenzeile, Name = Bezeichnung im Feld,
+    // AlleKeine = Knopf "Alle" neben der Liste - setzt die Auswahl zurück (beim Status mit nur drei Werten nicht nötig),
+    // Suche = maximale Länge des Suchtextes im Feld (0 = kein Suchfeld), Ziffern = nur Ziffern eingeben,
+    // Titel = Bezeichnung am oberen Rand des Feldes (null = keine),
+    // Zusatz = Haken nehmen Einträge dazu: anfangs nichts angehakt = alle Zeilen; sonst nur die angehakten.
+    //          Ohne Zusatz ist anfangs alles angehakt und ein entfernter Haken blendet den Eintrag aus.
     var filters = new[]
     {
-        (Id: "paFilter", Attr: "pa", Name: "PAs", Values: filterPAs),
-        (Id: "kundeFilter", Attr: "kunde", Name: "Kunden", Values: filterKunden)
+        (Id: "paFilter", Attr: "pa", Name: "PAs", Values: filterPAs, AlleKeine: true, Suche: 7, Ziffern: true, Titel: "PA", Zusatz: true),
+        (Id: "kundeNrFilter", Attr: "kundenr", Name: "Kunden-Nr.", Values: filterKundenNr, AlleKeine: true, Suche: 6, Ziffern: true, Titel: "Kunden-Nr.", Zusatz: true),
+        (Id: "kundeFilter", Attr: "kunde", Name: "Kunden", Values: filterKunden, AlleKeine: true, Suche: 30, Ziffern: false, Titel: "Kunde", Zusatz: true),
+        (Id: "statusFilter", Attr: "status", Name: "Status", Values: filterStatus, AlleKeine: false, Suche: 0, Ziffern: false, Titel: "Status", Zusatz: true)
     };
+
+    // Such-Dropdowns für die Spalten Sperrflag und Rechnungszeit (zweite Kopfzeile): jeder Wert einmal, aufsteigend,
+    // "Alle" oben, "(leer)" unten, wenn eine Zeile keinen Wert hat. Beide kommen aus derselben Vorlage (spaltenCombo).
+    List<string> WerteVon(Func<WipPa, short?> feld) => Model.Rows.Where(r => feld(r).HasValue).Select(r => feld(r).Value)
+        .Distinct().OrderBy(s => s).Select(s => s.ToString()).ToList();
+    var sperrflag = (Id: "sperrflag", Attr: "sperrflag", Name: "Sperrflag",
+        Werte: WerteVon(r => r.Sperrflag), Leer: Model.Rows.Any(r => !r.Sperrflag.HasValue));
+    var rechnungszeit = (Id: "rechnungszeit", Attr: "rechnungszeit", Name: "Rechnungszeit",
+        Werte: WerteVon(r => r.Rechnungszeit), Leer: Model.Rows.Any(r => !r.Rechnungszeit.HasValue));
+
+    // Bearbeitbares Dropdown einer Spalte mit Mehrfachauswahl: Klick ins Feld oder auf den Pfeil zeigt alle Werte,
+    // Tippen sucht in der Liste. Nichts angehakt = alle Zeilen, jeder Haken nimmt einen Wert dazu; "Alle" setzt die
+    // Auswahl zurück (siehe wippa.js)
+    Func<(string Id, string Attr, string Name, List<string> Werte, bool Leer), Microsoft.AspNetCore.Mvc.Razor.HelperResult> spaltenCombo =
+        @<div class="col-combo">
+            <input type="text" class="col-filter col-combo-input num" id="@(item.Id)Filter" data-col-attr="@item.Attr" data-match="wert"
+                   maxlength="6" autocomplete="off" placeholder="Alle" aria-label="@item.Name auswählen oder suchen"
+                   aria-controls="@(item.Id)Panel" disabled="@(Model.Rows.Count == 0)" />
+            <button type="button" class="col-combo-toggle" aria-label="@item.Name-Liste öffnen" aria-haspopup="listbox"
+                    aria-expanded="false" aria-controls="@(item.Id)Panel" disabled="@(Model.Rows.Count == 0)">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+            </button>
+            <div class="col-combo-panel" id="@(item.Id)Panel" role="listbox" aria-multiselectable="true" aria-label="@item.Name" hidden>
+                <div class="col-combo-option col-combo-alle" role="option" data-value="">Alle</div>
+                @foreach (var wert in item.Werte)
+                {
+                    <label class="col-combo-option" data-value="@wert"><input type="checkbox" class="col-combo-item" value="@wert" autocomplete="off" /><span>@wert</span></label>
+                }
+                @if (item.Leer)
+                {
+                    <label class="col-combo-option" data-value="(leer)"><input type="checkbox" class="col-combo-item" value="(leer)" autocomplete="off" /><span>(leer)</span></label>
+                }
+                <div class="col-combo-leer" hidden>Kein Treffer</div>
+            </div>
+        </div>;
 }
 
 <div class="toolbar">
     <div class="toolbar-title">
         <h1>@ViewData["Title"]</h1>
 
-        @* Die Tabelle zeigt nur Zeilen, deren PA UND deren Kunde in den Listen angehakt sind. *@
+        @* Die Tabelle zeigt nur Zeilen, deren PA, Kunden-Nr., Kunde UND Status in den Listen angehakt sind
+           (und die zu den Suchfeldern in der zweiten Kopfzeile der Tabelle passen). *@
         @foreach (var f in filters)
         {
-            <div class="pa-filter" id="@f.Id" data-row-attr="@f.Attr" data-name="@f.Name">
-                <button type="button" class="pa-filter-toggle" id="@(f.Id)Toggle" aria-haspopup="listbox" aria-expanded="false"
-                        aria-controls="@(f.Id)Panel" disabled="@(f.Values.Count == 0)">
-                    <span class="pa-filter-label" id="@(f.Id)Label">Alle @f.Name (@f.Values.Count)</span>
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
-                </button>
+            <div class="pa-filter" id="@f.Id" data-row-attr="@f.Attr" data-name="@f.Name" data-zusatz="@(f.Zusatz ? "1" : null)">
+                @if (f.Suche > 0)
+                {
+                    @* Bearbeitbares Dropdown: der Text im Feld filtert die Einträge der Liste, angehakt wird per Checkbox *@
+                    <div class="pa-filter-combo">
+                        @if (f.Titel != null)
+                        {
+                            <label class="pa-filter-titel" for="@(f.Id)Search">@f.Titel</label>
+                        }
+                        <input type="text" class="pa-filter-search" id="@(f.Id)Search" maxlength="@f.Suche" autocomplete="off"
+                               inputmode="@(f.Ziffern ? "numeric" : "text")" data-ziffern="@(f.Ziffern ? "1" : null)"
+                               placeholder="Alle @f.Name (@f.Values.Count)" aria-label="@f.Name in der Liste suchen"
+                               aria-controls="@(f.Id)Panel" disabled="@(f.Values.Count == 0)" />
+                        <button type="button" class="pa-filter-toggle" id="@(f.Id)Toggle" aria-haspopup="listbox" aria-expanded="false"
+                                aria-controls="@(f.Id)Panel" aria-label="@f.Name-Liste öffnen" disabled="@(f.Values.Count == 0)">
+                            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    @if (f.Titel != null)
+                    {
+                        <span class="pa-filter-titel">@f.Titel</span>
+                    }
+                    <button type="button" class="pa-filter-toggle" id="@(f.Id)Toggle" aria-haspopup="listbox" aria-expanded="false"
+                            aria-controls="@(f.Id)Panel" disabled="@(f.Values.Count == 0)">
+                        <span class="pa-filter-label" id="@(f.Id)Label">Alle @f.Name (@f.Values.Count)</span>
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg>
+                    </button>
+                }
                 <div class="pa-filter-panel" id="@(f.Id)Panel" role="listbox" aria-multiselectable="true" aria-label="@f.Name anzeigen" hidden>
+                    <div class="pa-filter-leer" hidden>Kein Treffer</div>
+                    @* Zusatz-Listen: angehakte Einträge, die die Suche gerade ausblendet (siehe wippa.js) *@
+                    <div class="pa-filter-weitere" hidden></div>
                     @foreach (var value in f.Values)
                     {
                         <label class="pa-filter-option">
-                            <input type="checkbox" class="pa-filter-item" value="@value" checked />
-                            <span>@value</span>
+                            <input type="checkbox" class="pa-filter-item" value="@value.Value" checked="@(!f.Zusatz)" autocomplete="off" />
+                            <span>@value.Label</span>
                         </label>
                     }
                 </div>
-                <button type="button" class="btn btn-secondary" id="@(f.Id)All" disabled="@(f.Values.Count == 0)" title="Alle @f.Name in der Liste auswählen">Alle</button>
-                <button type="button" class="btn btn-secondary" id="@(f.Id)None" disabled="@(f.Values.Count == 0)" title="Alle @f.Name in der Liste abwählen">Keine</button>
+                @if (f.AlleKeine)
+                {
+                    @* "Alle" entfernt alle Haken und leert die Suche - die Tabelle zeigt wieder alle Zeilen *@
+                    <button type="button" class="btn btn-secondary" id="@(f.Id)All" disabled="@(f.Values.Count == 0)" title="Alle @f.Name anzeigen (Auswahl zurücksetzen)">Alle</button>
+                }
             </div>
         }
     </div>
@@ -68,26 +152,10 @@
 {
     <div class="alert alert-error">@Model.ErrorMessage</div>
 }
-@if (Model.ExportResult != null)
-{
-    @* Ergebnis des Exports als Akkordeon: je erzeugter XML-Datei eine Zeile, nach dem Export aufgeklappt.
-       Mit JavaScript baut wippa.js denselben Block nach dem Export auf. *@
-    <details class="export-result" id="exportStatus" open>
-        <summary>@Model.ExportResult.Files.Count XML-Datei(en) für Sage geschrieben nach @Model.ExportResult.Folder</summary>
-        <ul>
-            @foreach (var file in Model.ExportResult.Files)
-            {
-                <li>@file</li>
-            }
-            @foreach (var pa in Model.ExportResult.PAsWithoutPositions)
-            {
-                <li class="skipped">PA @pa: keine abrechenbaren Positionen, nicht exportiert</li>
-            }
-        </ul>
-    </details>
-}
 
 <form asp-action="Uebernehmen" method="post" id="exportForm" data-export-start-url="@Url.Action("ExportStart")" data-export-step-url="@Url.Action("ExportStep")" data-neu-erstellen-url="@Url.Action("NeuErstellen")">
+    @* Kennung dieser Seite für die Sperren in SageHDR - geht mit jedem Aufruf mit (siehe SperrKennung) *@
+    <input type="hidden" name="Seite" value="@Model.Seite" />
     <div class="table-wrap">
         <table class="grid" data-positionen-url="@Url.Action("Positionen")" data-sperre-verlaengern-url="@(Model.CanWork ? Url.Action("SperreVerlaengern") : null)" data-sperre-freigeben-url="@(Model.CanWork ? Url.Action("SperreFreigeben") : null)">
             <thead>
@@ -105,41 +173,68 @@
                     <th>@Html.DisplayNameFor(m => m.Rows[0].FaktuNotizen2)</th>
                     <th class="num">@Html.DisplayNameFor(m => m.Rows[0].Sperrflag)</th>
                     <th class="num">@Html.DisplayNameFor(m => m.Rows[0].Rechnungszeit)</th>
-                    <th>@Html.DisplayNameFor(m => m.Rows[0].Problem)</th>
-                    <th class="num">@Html.DisplayNameFor(m => m.Rows[0].PAVersion)</th>
                     <th class="num">@Html.DisplayNameFor(m => m.Rows[0].EndpreisSum)</th>
-                    <th>@Html.DisplayNameFor(m => m.Rows[0].RueckmeldungSchnittstelle)</th>
+                </tr>
+                @* Zweite Kopfzeile: Suchfilter für PA, Kunden-Nr. und Kunde, Such-Dropdowns für Sperrflag und Rechnungszeit (siehe wippa.js) *@
+                <tr class="filter-row">
+                    <th class="col-select"></th>
+                    <th class="col-toggle"></th>
+                    <th class="num">
+                        <input type="text" class="col-filter num" data-col-attr="pa" data-match="enthaelt" data-ziffern="1"
+                               maxlength="7" inputmode="numeric" autocomplete="off" placeholder="Suchen" aria-label="PA suchen"
+                               disabled="@(Model.Rows.Count == 0)" />
+                    </th>
+                    <th></th>
+                    <th class="num">
+                        <input type="text" class="col-filter num" data-col-attr="kundenr" data-match="enthaelt" data-ziffern="1"
+                               maxlength="6" inputmode="numeric" autocomplete="off" placeholder="Suchen" aria-label="Kunden-Nr. suchen"
+                               disabled="@(Model.Rows.Count == 0)" />
+                    </th>
+                    <th>
+                        <input type="text" class="col-filter col-filter-wide" data-col-attr="kunde" data-match="enthaelt"
+                               maxlength="30" autocomplete="off" placeholder="Suchen" aria-label="Kunde suchen"
+                               disabled="@(Model.Rows.Count == 0)" />
+                    </th>
+                    <th></th>
+                    <th></th>
+                    <th></th>
+                    <th class="num">@spaltenCombo(sperrflag)</th>
+                    <th class="num">@spaltenCombo(rechnungszeit)</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
                 @if (!Model.IsLoggedIn)
                 {
-                    <tr><td colspan="15" class="empty">Bitte anmelden, um die Daten zu laden.</td></tr>
+                    <tr><td colspan="12" class="empty">Bitte anmelden, um die Daten zu laden.</td></tr>
                 }
                 else if (!Model.IsAuthorized)
                 {
-                    <tr><td colspan="15" class="empty">Keine Berechtigung für die Fakturierung mit Sage - es werden keine Daten geladen.</td></tr>
+                    <tr><td colspan="12" class="empty">Keine Berechtigung für die Fakturierung mit Sage - es werden keine Daten geladen.</td></tr>
                 }
                 else if (Model.Rows.Count == 0 && Model.ErrorMessage == null)
                 {
-                    <tr><td colspan="15" class="empty">Keine abzurechnenden PAs vorhanden.</td></tr>
+                    <tr><td colspan="12" class="empty">Keine abzurechnenden PAs vorhanden.</td></tr>
                 }
-                @* Erscheint, wenn die Filter (PAs, Kunden) alle Zeilen ausblenden *@
-                <tr id="filterEmpty" hidden><td colspan="15" class="empty">Mit der Auswahl in den Listen PAs und Kunden wird kein PA angezeigt.</td></tr>
+                @* Erscheint, wenn die Filter alle Zeilen ausblenden *@
+                <tr id="filterEmpty" hidden><td colspan="12" class="empty">Mit der Auswahl in den Filtern wird kein PA angezeigt.</td></tr>
                 @for (var i = 0; i < Model.Rows.Count; i++)
                 {
                     var row = Model.Rows[i];
+                    // Status für den Status-Filter: ohne Eintrag gilt "neu"; 1 = XML erzeugt bleibt leer (nicht filterbar)
+                    var sageStatus = row.SageRueckmeldung?.Status ?? WipSageWeb.Data.SageStatus.Neu;
+                    var statusWert = sageStatus == WipSageWeb.Data.SageStatus.XmlErzeugt ? "" : ((byte)sageStatus).ToString();
                     var zustandKlasse = row.Zustand == PaZustand.Uebergeben ? "is-exported"
                         : row.Zustand == PaZustand.GesperrtVonAnderem ? "is-locked"
                         : row.Zustand == PaZustand.Unbekannt ? "is-unknown" : null;
-                    <tr class="pa-row @(row.IsSelected ? "selected" : null) @zustandKlasse" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())">
+                    <tr class="pa-row @(row.IsSelected ? "selected" : null) @zustandKlasse" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())" data-kundenr="@row.KundeNr" data-sperrflag="@row.Sperrflag" data-rechnungszeit="@row.Rechnungszeit" data-status="@statusWert">
                         <td class="col-select">
                             @* Von anderen gesperrte PAs (auch ein dort gerade neu erstelltes) sind nur lesbar: Checkbox gesperrt.
                                Ein schon übergebener, freier PA bleibt anklickbar (data-uebergeben): beim Anhaken fragt wippa.js,
-                               ob die Datei noch einmal erstellt werden soll. *@
+                               ob der PA noch einmal an Sage übergeben werden soll. *@
                             <input asp-for="Rows[i].IsSelected" class="row-select" disabled="@row.IsReadOnly"
                                    data-uebergeben="@(row.KannNeuErstelltWerden ? "1" : null)"
-                                   title="@(row.KannNeuErstelltWerden ? "Haken setzen, um die XML-Datei noch einmal zu erstellen" : null)" />
+                                   title="@(row.KannNeuErstelltWerden ? "Haken setzen, um den PA noch einmal an Sage zu übergeben" : null)" />
                             <input type="hidden" asp-for="Rows[i].PA" />
                         </td>
                         <td class="col-toggle">
@@ -155,7 +250,7 @@
                             @switch (row.Zustand)
                             {
                                 case PaZustand.Uebergeben:
-                                    <span class="status status-exported" title="@(row.GesperrtFuerAndere ? $"{row.Datei} - wird gerade von {row.GesperrtVon} neu erstellt (gesperrt bis {row.GesperrtBis?.ToString("HH:mm")} Uhr)" : row.Datei)">
+                                    <span class="status status-exported" title="@(row.GesperrtFuerAndere ? $"gesperrt von {row.GesperrtVon} (bis {row.GesperrtBis?.ToString("HH:mm")} Uhr)" : null)">
                                         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.5l5 5L19.5 7" /></svg>
                                         <span class="status-text">
                                             <span>übergeben am @(row.UebergebenAm?.ToString("dd.MM.yyyy HH:mm"))</span>
@@ -184,6 +279,11 @@
                                     @(row.SageRueckmeldung.StatusText ?? "Sage")@(string.IsNullOrWhiteSpace(row.SageRueckmeldung.MessageVonSage) ? "" : ": " + row.SageRueckmeldung.MessageVonSage)
                                 </div>
                             }
+                            @if (row.SageRueckmeldung?.OfficeLineHandle != null || row.SageRueckmeldung?.OfficeLineVorgangsHandle != null)
+                            {
+                                @* OfficeLineHandle des Auftrags und OfficeLineVorgangsHandle des Vorgangs in Sage (SageHDR) *@
+                                <div class="sage-handle" title="OfficeLineHandle des Auftrags / OfficeLineVorgangsHandle des Vorgangs in Sage (SageHDR)">Sage-Handle @row.SageRueckmeldung.OfficeLineHandle@(row.SageRueckmeldung.OfficeLineVorgangsHandle != null ? " / Vorgang " + row.SageRueckmeldung.OfficeLineVorgangsHandle : "")</div>
+                            }
                         </td>
                         <td class="num">@row.KundeNr</td>
                         <td>@row.KundeName</td>
@@ -192,14 +292,11 @@
                         <td class="text">@row.FaktuNotizen2</td>
                         <td class="num">@row.Sperrflag</td>
                         <td class="num">@row.Rechnungszeit</td>
-                        <td class="text">@row.Problem</td>
-                        <td class="num">@row.PAVersion</td>
                         <td class="num">@Html.DisplayFor(m => m.Rows[i].EndpreisSum)</td>
-                        <td>@row.RueckmeldungSchnittstelle</td>
                     </tr>
                     @* Akkordeon-Inhalt: wird beim ersten Aufklappen per /WipPa/Positionen nachgeladen (siehe wippa.js) *@
                     <tr class="detail-row" id="detail-@(i)" data-pa="@row.PA" hidden>
-                        <td colspan="15">
+                        <td colspan="12">
                             <div class="detail-panel">
                                 <div class="detail-empty">Positionen werden geladen …</div>
                             </div>
@@ -256,7 +353,7 @@
     @* Rückfrage, wenn bei einem schon übergebenen PA der Haken gesetzt wird (siehe wippa.js, WipConfirm) *@
     <div class="dialog-backdrop" id="confirmDialog" hidden>
         <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
-            <h2 id="confirmTitle" class="dialog-title">Datei neu erstellen?</h2>
+            <h2 id="confirmTitle" class="dialog-title">Erneut an Sage übergeben?</h2>
             <p id="confirmText" class="dialog-message"></p>
             <div class="dialog-actions">
                 <button type="button" class="btn btn-secondary" id="confirmCancel">Abbrechen</button>
@@ -268,9 +365,9 @@
 
 @if (Model.PopupMessage != null)
 {
-    @* Meldungs-Popup, z. B. wenn der Export-Ordner für Sage nicht gültig ist *@
+    @* Meldungs-Popup, z. B. Ergebnis des Exports oder keine gültige Adresse der Sage-Schnittstelle *@
     <div class="dialog-backdrop" id="messageDialog">
-        <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="messageTitle" aria-describedby="messageText">
+        <div class="dialog @(Model.PopupMessage.Length > 300 ? "dialog-wide" : null)" role="alertdialog" aria-modal="true" aria-labelledby="messageTitle" aria-describedby="messageText">
             <h2 id="messageTitle" class="dialog-title">Hinweis</h2>
             <p id="messageText" class="dialog-message">@Model.PopupMessage</p>
             <div class="dialog-actions">

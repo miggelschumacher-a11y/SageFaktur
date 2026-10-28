@@ -62,6 +62,10 @@ button.app-power img { display: block; width: 30px; height: 30px; }
     background: rgba(0, 0, 0, .5);
 }
 .dialog {
+    /* Nie höher als das Fenster: lange Meldungen scrollen, die Knöpfe bleiben sichtbar */
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 32px);
     width: 100%;
     max-width: 380px;
     padding: 24px;
@@ -93,7 +97,10 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 
 .dialog-title { margin: 0 0 8px; font-size: 20px; line-height: 32px; font-weight: 500; }
 .dialog-text { margin: 0 0 20px; color: var(--text-secondary); }
-.dialog-message { margin: 0; white-space: pre-line; overflow-wrap: break-word; }
+.dialog-message { flex: 0 1 auto; min-height: 0; margin: 0; overflow-y: auto; white-space: pre-line; overflow-wrap: break-word; }
+.dialog-actions { flex: none; }
+/* Ergebnis des Exports: breiter, damit die Liste der PAs lesbar bleibt */
+.dialog.dialog-wide { max-width: 640px; }
 .dialog-error {
     margin-bottom: 16px;
     padding: 10px 12px;
@@ -132,7 +139,7 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 .toolbar h1 { font-size: 24px; line-height: 32px; font-weight: 400; margin: 0; }
 .toolbar-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
 
-/* ---- Filter PAs / Kunden: Dropdown-Listen mit Mehrfachauswahl (mat-select multiple) ---- */
+/* ---- Filter PAs / Kunden-Nr. / Kunden / Status: Dropdown-Listen mit Mehrfachauswahl (mat-select multiple) ---- */
 .pa-filter { position: relative; display: flex; align-items: center; gap: 8px; }
 .pa-filter-toggle {
     display: flex;
@@ -178,8 +185,56 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 }
 .pa-filter-option:hover { background: var(--hover); }
 .pa-filter-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Bearbeitbare Liste (PAs, Kunden-Nr., Kunden): Suchfeld + Pfeil in einem Rahmen; der Platzhalter zeigt die Auswahl */
+.pa-filter-combo {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 190px;
+    height: 36px;
+    border: 1px solid rgba(0, 0, 0, .38);
+    border-radius: 4px;
+    background: var(--surface);
+}
+.pa-filter-combo:hover { border-color: #000; }
+/* Bezeichnung am oberen Rand des Feldes (wie mat-form-field appearance="outline") */
+.pa-filter-titel {
+    position: absolute;
+    top: -9px;
+    left: 8px;
+    padding: 0 4px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 16px;
+    pointer-events: none;
+}
+.pa-filter-combo:focus-within .pa-filter-titel { color: #000; }
+/* Status: Titel über dem Knopf (liegt im .pa-filter, das ebenfalls position: relative hat) */
+.pa-filter > .pa-filter-titel { z-index: 1; }
+.pa-filter-combo:focus-within { border-color: #000; box-shadow: 0 0 0 2px #ffc700; }
+.pa-filter-search {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 4px 0 12px;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+}
+.pa-filter-search::placeholder { color: var(--text); opacity: 1; }
+.pa-filter-search:focus::placeholder { color: var(--text-secondary); }
+.pa-filter-search:disabled::placeholder { color: rgba(0, 0, 0, .26); }
+.pa-filter-combo .pa-filter-toggle { min-width: 0; height: 34px; padding: 0 6px; border: none; background: transparent; }
+.pa-filter-combo .pa-filter-toggle:focus-visible { box-shadow: none; }
+.pa-filter-option[hidden], .pa-filter-leer[hidden] { display: none; }
+.pa-filter-leer { padding: 8px 16px; color: var(--text-secondary); }
+.pa-filter-weitere { padding: 8px 16px; border-bottom: 1px solid var(--divider); color: var(--text-secondary); font-size: 13px; }
+.pa-filter-weitere[hidden] { display: none; }
 /* Kundenliste: Namen sind länger als PA-Nummern */
-#kundeFilter .pa-filter-toggle { min-width: 220px; }
+#kundeFilter .pa-filter-combo { width: 260px; }
 #kundeFilter .pa-filter-panel { min-width: 300px; max-width: 420px; }
 #kundeFilter .pa-filter-option { font-variant-numeric: normal; padding-top: 6px; padding-bottom: 6px; }
 .toolbar-info {
@@ -214,49 +269,6 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 }
 .alert-error { border-left-color: var(--warn); color: #b71c1c; }
 .alert-info  { border-left-color: var(--primary); }
-
-/* ---- Export-Ergebnis als Akkordeon (mat-expansion-panel): je XML-Datei eine Zeile ---- */
-.export-result {
-    margin-bottom: 16px;
-    background: var(--surface);
-    border-radius: 4px;
-    border-left: 4px solid #000;
-    box-shadow: var(--elevation-2);
-}
-.export-result summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 48px;
-    padding: 8px 16px;
-    font-weight: 500;
-    cursor: pointer;
-    list-style: none;
-    overflow-wrap: anywhere;
-}
-.export-result summary::-webkit-details-marker { display: none; }
-.export-result summary::before {
-    content: "";
-    flex: none;
-    width: 8px;
-    height: 8px;
-    margin: 0 6px 0 2px;
-    border-right: 2.4px solid currentColor;
-    border-bottom: 2.4px solid currentColor;
-    transform: rotate(-45deg);
-    transition: transform .15s ease;
-}
-.export-result[open] summary::before { transform: rotate(45deg); }
-.export-result summary:hover { background: var(--hover); }
-.export-result ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--divider); }
-.export-result li {
-    padding: 8px 16px 8px 42px;
-    border-bottom: 1px solid var(--divider);
-    font-variant-numeric: tabular-nums;
-    overflow-wrap: anywhere;
-}
-.export-result li:last-child { border-bottom: none; }
-.export-result li.skipped { color: var(--text-secondary); }
 
 /* ---- Karte mit Tabelle (mat-card + mat-table) ---- */
 .table-wrap {
@@ -302,6 +314,80 @@ table.grid td.text {
 }
 table.grid tbody tr:last-child td { border-bottom: none; }
 table.grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Zweite Kopfzeile mit den Suchfiltern: klebt unter der ersten (56px hoch) */
+table.grid > thead > tr.filter-row > th { top: 56px; height: 44px; padding-top: 4px; padding-bottom: 4px; }
+table.grid .col-filter {
+    width: 100%;
+    min-width: 80px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid rgba(0, 0, 0, .38);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 400;
+}
+table.grid .col-filter.num { text-align: right; }
+table.grid .col-filter-wide { min-width: 160px; }
+table.grid .col-filter:hover { border-color: #000; }
+table.grid .col-filter:focus { outline: none; border-color: #000; box-shadow: 0 0 0 2px #ffc700; }
+table.grid .col-filter:disabled { border-color: rgba(0, 0, 0, .12); }
+/* Sperrflag: Dropdown in der zweiten Kopfzeile - Feld + Pfeil in einem Rahmen, Liste darunter */
+table.grid .col-combo {
+    display: flex;
+    align-items: center;
+    min-width: 96px;
+    height: 32px;
+    border: 1px solid rgba(0, 0, 0, .38);
+    border-radius: 4px;
+    background: var(--surface);
+}
+table.grid .col-combo:hover { border-color: #000; }
+table.grid .col-combo:focus-within { border-color: #000; box-shadow: 0 0 0 2px #ffc700; }
+table.grid .col-combo .col-filter { min-width: 0; height: 30px; border: none; box-shadow: none; background: transparent; }
+table.grid .col-combo .col-filter::placeholder { color: var(--text); opacity: 1; }
+.col-combo-toggle {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+}
+.col-combo-toggle[aria-expanded=true] svg { transform: rotate(180deg); }
+.col-combo-toggle:disabled { color: rgba(0, 0, 0, .26); cursor: default; }
+.col-combo-panel {
+    position: fixed;
+    z-index: 30;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 4px 0;
+    background: var(--surface);
+    border-radius: 4px;
+    box-shadow: var(--elevation-4);
+}
+.col-combo-panel[hidden], .col-combo-option[hidden], .col-combo-leer[hidden] { display: none; }
+.col-combo-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 36px;
+    padding: 0 16px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+}
+.col-combo-option:hover { background: var(--hover); }
+/* "Alle" ist hervorgehoben, solange nichts angehakt ist (= alle Zeilen) */
+.col-combo-option.aktiv { background: rgba(255, 199, 0, .25); font-weight: 500; }
+.col-combo-alle { border-bottom: 1px solid var(--divider); }
+.col-combo-leer { padding: 8px 16px; color: var(--text-secondary); font-size: 14px; font-weight: 400; }
 table.grid th:first-child, table.grid td:first-child { padding-left: 24px; }
 table.grid th:last-child, table.grid td:last-child { padding-right: 24px; }
 table.grid .col-select { width: 58px; padding-right: 0; }
@@ -320,6 +406,7 @@ table.grid .col-status { white-space: nowrap; }
 /* Rückmeldung von Sage unter dem Status-Abzeichen */
 .sage-rueckmeldung { margin-top: 4px; max-width: 260px; white-space: normal; font-size: 12px; color: var(--text-secondary); }
 .sage-rueckmeldung.sage-fehler { color: #b71c1c; font-weight: 500; }
+.sage-handle { margin-top: 2px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .status-locked   { background: #fdecea; color: #b71c1c; }
 .status-exported { background: #e8f5e9; color: #1b5e20; }
 .status-unknown  { background: #eeeeee; color: var(--text-secondary); }

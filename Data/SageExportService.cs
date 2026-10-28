@@ -1,108 +1,155 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Data.SqlClient;
 using WipSageWeb.Models;
 
 namespace WipSageWeb.Data
 {
-    /// <summary>Fehler, der dem Benutzer als Popup gezeigt wird (z. B. kein gültiger Export-Ordner).</summary>
+    /// <summary>Fehler, der dem Benutzer als Popup gezeigt wird (z. B. keine gültige Adresse der Sage-Schnittstelle).</summary>
     public sealed class SageExportException : Exception
     {
         public SageExportException(string message) : base(message) { }
         public SageExportException(string message, Exception inner) : base(message, inner) { }
     }
 
+    /// <summary>Wie die Übergabe eines PA an Sage ausgegangen ist.</summary>
+    public enum SageExportErgebnis
+    {
+        /// <summary>Sage hat den Auftrag angelegt.</summary>
+        Uebergeben,
+
+        /// <summary>Sage hat den Auftrag abgelehnt (Meldung von Sage); der PA kann erneut übergeben werden.</summary>
+        Abgelehnt,
+
+        /// <summary>Gesendet, aber keine Antwort von Sage - in Sage prüfen, ob der Auftrag angelegt wurde.</summary>
+        KeineAntwort,
+
+        /// <summary>Die Prozedur hat keine abrechenbaren Positionen geliefert; nichts gesendet.</summary>
+        KeinePositionen,
+
+        /// <summary>
+        /// Fehler, der nur diesen PA betrifft (z. B. HTTP 413 - Auftrag zu groß, fehlerhafte Positionsdaten, inzwischen
+        /// von einem anderen Benutzer gesperrt): der PA wird übersprungen und bleibt übergebbar, der Export läuft weiter.
+        /// </summary>
+        NichtUebergeben
+    }
+
+    /// <summary>Ergebnis der Übergabe eines PA.</summary>
+    public sealed class SageExportSchritt
+    {
+        public int PA { get; set; }
+        public SageExportErgebnis Ergebnis { get; set; }
+
+        /// <summary>OfficeLineHandle des in Sage angelegten Auftrags (nur Uebergeben; siehe <see cref="SageAntwort"/>).</summary>
+        public int? OfficeLineHandle { get; set; }
+
+        /// <summary>
+        /// OfficeLineVorgangsHandle des Vorgangs in Sage, zu dem der Auftrag gehört (nur Uebergeben; siehe <see cref="SageAntwort"/>).
+        /// </summary>
+        public int? OfficeLineVorgangsHandle { get; set; }
+
+        /// <summary>Meldung von Sage (Abgelehnt, auch Uebergeben falls Sage eine liefert) bzw. Hinweis (KeineAntwort, NichtUebergeben).</summary>
+        public string Meldung { get; set; }
+    }
+
     public sealed class SageExportResult
     {
-        public string Folder { get; set; }
-        public List<string> Files { get; } = new List<string>();
-
-        /// <summary>Ausgewählte PAs, zu denen die Prozedur keine Positionen geliefert hat.</summary>
-        public List<int> PAsWithoutPositions { get; } = new List<int>();
+        public string Url { get; set; }
+        public List<SageExportSchritt> Schritte { get; } = new List<SageExportSchritt>();
     }
 
     /// <summary>
-    /// Ein vorbereiteter Export: Ordner ist geprüft, die PAs stehen fest.
-    /// Danach wird PA für PA gelesen und geschrieben - so kann die Seite den echten Fortschritt anzeigen.
+    /// Ein vorbereiteter Export: die Adresse der Sage-Schnittstelle ist geprüft, die PAs stehen fest.
+    /// Danach wird PA für PA gelesen und gesendet - so kann die Seite den echten Fortschritt anzeigen.
     /// </summary>
     public sealed class SageExportJob
     {
-        public string Folder { get; set; }
-        public string Timestamp { get; set; }
+        public string Url { get; set; }
         public List<int> PAs { get; } = new List<int>();
 
-        /// <summary>Benutzer, der den Export gestartet hat - nur er darf die Dateien seiner PAs schreiben.</summary>
+        /// <summary>Konfig.SageTest: Testbetrieb - Artikelnummer in den XML-Daten immer die Test-Artikelnummer.</summary>
+        public bool Test { get; set; }
+
+        /// <summary>Benutzer, der den Export gestartet hat - nur er darf seine PAs übergeben.</summary>
         public SperrInhaber Inhaber { get; set; }
     }
 
     public interface ISageExportService
     {
-        /// <summary>Prüft Konfig.SageExportOrdner und legt die PAs des Exports fest.</summary>
+        /// <summary>
+        /// Prüft die Adresse der Sage-Schnittstelle (Konfig.SageTestExportURL bzw. SageReleaseExportURL, je nach
+        /// Konfig.SageTest) und legt die PAs des Exports fest.
+        /// </summary>
         Task<SageExportJob> PrepareAsync(ICollection<int> selectedPAs, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Liest die Positionen eines PA und schreibt seine XML-Datei; null, wenn der PA keine Positionen hat.</summary>
-        Task<string> ExportOneAsync(SageExportJob job, int pa, CancellationToken cancellationToken = default(CancellationToken));
+        /// <summary>Liest die Positionen eines PA und sendet sie als Auftrag an Sage.</summary>
+        Task<SageExportSchritt> ExportOneAsync(SageExportJob job, int pa, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Schreibt je PA eine XML-Datei in Konfig.SageExportOrdner.</summary>
+        /// <summary>Sendet je PA einen Auftrag an die Sage-Schnittstelle (Adresse aus Konfig, siehe PrepareAsync).</summary>
         Task<SageExportResult> ExportAsync(ICollection<int> selectedPAs, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Gibt einen schon übergebenen PA zum erneuten Erstellen frei: SageHDR.Datei und DateiErstelltAm werden NULL,
-        /// der Satz ist für den Benutzer gesperrt, und die bisherige XML-Datei wird - falls sie noch im Export-Ordner
-        /// liegt - gelöscht. Liefert den Namen der gelöschten Datei, null wenn keine mehr da war.
-        /// Lässt sich die Datei nicht löschen, bleibt alles wie es war und es wird eine SageExportException geworfen.
+        /// Gibt einen schon übergebenen PA zur erneuten Übergabe frei: SageHDR.Status wird "neu",
+        /// der Satz ist für den Benutzer gesperrt.
         /// </summary>
-        Task<string> NeuErstellenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
+        Task NeuErstellenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
     }
 
     /// <summary>
-    /// Stellt die ausgewählten PAs als XML für Sage bereit: je PA eine Datei im Order-Format
-    /// (Beispiel "XML-Struktur-#2.xml"), gefüllt aus dbo.WIPSage_ProcR_getWIP_PaketAnaEx.
+    /// Übergibt die ausgewählten PAs an Sage: je PA ein Auftrag im Order-Format (Beispiel "XML-Struktur-#2.xml"),
+    /// gefüllt aus dbo.WIPSage_ProcR_getWIP_PaketAnaEx und per POST an die Sage-Schnittstelle gesendet - im Testbetrieb
+    /// (Konfig.SageTest = true) an Konfig.SageTestExportURL, sonst an Konfig.SageReleaseExportURL.
     /// </summary>
     public sealed class SageExportService : ISageExportService
     {
+        private const string KeineAntwortHinweis =
+            "Keine Antwort von Sage - bitte in Sage prüfen, ob der Auftrag angelegt wurde.";
+
+        /// <summary>Artikelnummer, die bei Konfig.SageTest = true in allen Positionen an Sage geht.</summary>
+        public const string TestArtikelnummer = "04005019";
 
         private readonly IWipSageRepository _repository;
+        private readonly ISageSchnittstelle _sage;
 
-        public SageExportService(IWipSageRepository repository)
+        public SageExportService(IWipSageRepository repository, ISageSchnittstelle sage)
         {
             _repository = repository;
+            _sage = sage;
         }
 
         public async Task<SageExportJob> PrepareAsync(ICollection<int> selectedPAs, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Erst den Ordner prüfen - ohne gültiges Ziel wird nichts gelesen oder geschrieben
-            var folder = (await _repository.GetSageExportOrdnerAsync(cancellationToken) ?? "").Trim();
-            if (folder.Length == 0)
+            // Erst die Adresse prüfen - ohne gültiges Ziel wird nichts gelesen oder gesendet
+            var konfig = await _repository.GetSageKonfigAsync(cancellationToken);
+            var url = (konfig.ExportUrl ?? "").Trim();
+            if (url.Length == 0)
             {
                 throw new SageExportException(
-                    "In der Konfiguration ist kein Export-Ordner für Sage hinterlegt (Tabelle Konfig, Feld SageExportOrdner).");
+                    $"In der Konfiguration ist keine Adresse der Sage-Schnittstelle hinterlegt (Tabelle Konfig, Feld {konfig.ExportUrlFeld}" +
+                    (konfig.Test ? ", weil SageTest = true)." : ", weil SageTest = false)."));
             }
-            if (!Directory.Exists(folder))
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             {
                 throw new SageExportException(
-                    $"Der Export-Ordner für Sage ist nicht gültig oder nicht erreichbar:\n{folder}\n(Tabelle Konfig, Feld SageExportOrdner)");
+                    $"Die Adresse der Sage-Schnittstelle ist keine gültige http- oder https-Adresse:\n{url}\n(Tabelle Konfig, Feld {konfig.ExportUrlFeld})");
             }
 
             var job = new SageExportJob
             {
-                Folder = folder,
-                Timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture),
+                Url = url,
+                Test = konfig.Test,
                 Inhaber = inhaber
             };
             job.PAs.AddRange(selectedPAs.Distinct().OrderBy(p => p));
             return job;
         }
 
-        public async Task<string> ExportOneAsync(SageExportJob job, int pa, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<SageExportSchritt> ExportOneAsync(SageExportJob job, int pa, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!job.PAs.Contains(pa))
             {
@@ -115,88 +162,136 @@ namespace WipSageWeb.Data
                 .ToList();
             if (paPositions.Count == 0)
             {
-                return null;
+                return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.KeinePositionen };
             }
 
-            var fileName = $"WIPSage_PA_{pa.ToString(CultureInfo.InvariantCulture)}_{job.Timestamp}.xml";
-            var path = Path.Combine(job.Folder, fileName);
-
-            // Erst in SageHDR beanspruchen, dann schreiben: so entsteht für jeden PA höchstens eine Datei,
-            // auch wenn zwei Benutzer gleichzeitig exportieren
+            // Erst in SageHDR beanspruchen (Status "XML erzeugt", AnSageGesendetAm/-Von), dann senden:
+            // so geht jeder PA höchstens einmal an Sage, auch wenn zwei Benutzer gleichzeitig exportieren
+            // Nicht erteilt betrifft nur diesen PA: überspringen, die übrigen PAs werden weiter übergeben
             var anspruch = await _repository.ExportBeanspruchenAsync(pa, job.Inhaber, cancellationToken);
             if (!anspruch.Erteilt)
             {
-                if (anspruch.DateiErstelltAm.HasValue)
-                {
-                    throw new SageExportException(
-                        $"Für PA {pa} wurde bereits am {anspruch.DateiErstelltAm.Value:dd.MM.yyyy} um {anspruch.DateiErstelltAm.Value:HH:mm} Uhr" + (string.IsNullOrEmpty(anspruch.DateiErstelltVon) ? "" : $" von {anspruch.DateiErstelltVon}") + $" eine XML-Datei erzeugt:\n{anspruch.Datei}");
-                }
+                string grund;
                 if (!anspruch.Vorhanden)
                 {
-                    throw new SageExportException($"Für PA {pa} gibt es keinen Eintrag in SageHDR. Bitte die Seite neu laden.");
+                    grund = "Kein Eintrag in SageHDR - bitte die Seite neu laden.";
                 }
-                throw new SageExportException($"PA {pa} ist von {anspruch.GesperrtVon} gesperrt und kann nicht übergeben werden.");
+                else if (SageStatusText.IstUebergeben(anspruch.Status))
+                {
+                    grund = "Wurde bereits" + (anspruch.AnSageGesendetAm.HasValue ? $" am {anspruch.AnSageGesendetAm.Value:dd.MM.yyyy} um {anspruch.AnSageGesendetAm.Value:HH:mm} Uhr" : "") + (string.IsNullOrEmpty(anspruch.AnSageGesendetVon) ? "" : $" von {anspruch.AnSageGesendetVon}") + " an Sage übergeben.";
+                }
+                else
+                {
+                    grund = $"Ist von {anspruch.GesperrtVon} gesperrt.";
+                }
+                return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.NichtUebergeben, Meldung = grund };
             }
 
+            SageAntwort antwort;
+            List<SagePosZeile> zeilen;
             try
             {
-                // Vor dem Erstellen der XML-Datei: SagePos für diesen PA löschen und mit den Positionen neu anlegen
-                await _repository.SagePosErsetzenAsync(pa, SagePosZeilen(pa, paPositions), cancellationToken);
+                // Vor dem Senden: SagePos für diesen PA löschen und mit den Positionen neu anlegen
+                zeilen = SagePosZeilen(pa, paPositions);
+                await _repository.SagePosErsetzenAsync(pa, zeilen, cancellationToken);
 
-                var settings = new XmlWriterSettings { Indent = true, Encoding = new UTF8Encoding(false) };
-                using (var writer = XmlWriter.Create(path, settings))
-                {
-                    BuildDocument(pa, paPositions).Save(writer);
-                }
+                antwort = await _sage.PostXmlTransactionAsync(job.Url, BuildDocument(pa, paPositions, job.Test), cancellationToken);
+            }
+            catch (SageKeineAntwortException)
+            {
+                // Gesendet, aber keine Antwort: Sage kann den Auftrag angelegt haben. Der PA bleibt deshalb
+                // übergeben (Status "XML erzeugt" mit Hinweis) - erneut übergeben erst nach Prüfung in Sage.
+                await _repository.ExportAbschliessenAsync(pa, job.Inhaber, SageStatus.XmlErzeugt, KeineAntwortHinweis, null, null, null, CancellationToken.None);
+                return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.KeineAntwort, Meldung = KeineAntwortHinweis };
             }
             catch (Exception ex)
             {
-                // SagePos oder Datei konnte nicht geschrieben werden -> Anspruch zurücknehmen, damit der PA wieder exportierbar ist
-                await _repository.ExportZuruecknehmenAsync(pa, job.Inhaber, CancellationToken.None);
-                if (ex is SageExportException)
+                // SagePos oder Versand fehlgeschlagen -> Status und AnSageGesendetAm/-Von zurück, der PA ist wieder übergebbar
+                await _repository.ExportZuruecknehmenAsync(pa, job.Inhaber, anspruch, CancellationToken.None);
+                if (ex is SageNichtErreichbarException)
                 {
-                    throw;
+                    // Schnittstelle weg: auch alle weiteren PAs würden scheitern -> Export abbrechen
+                    throw new SageExportException($"PA {pa} konnte nicht übergeben werden. {ex.Message}", ex);
                 }
                 if (ex is SqlException)
                 {
+                    // Datenbankfehler: Export abbrechen
                     throw new SageExportException($"Die Positionen von PA {pa} konnten nicht in SagePos gespeichert werden:\n{ex.Message}", ex);
                 }
-                if (ex is IOException || ex is UnauthorizedAccessException)
+                if (ex is SageExportException)
                 {
-                    throw new SageExportException(
-                        $"In den Export-Ordner für Sage kann nicht geschrieben werden:\n{job.Folder}\n{ex.Message}", ex);
+                    // Betrifft nur diesen PA (HTTP-Fehler wie 413, unbrauchbare Antwort, fehlerhafte Positionsdaten):
+                    // überspringen, die übrigen PAs werden weiter übergeben
+                    var meldung = ex.Message.Replace("\r", "").Replace("\n", " ");
+                    var vorsatz = $"PA {pa}: ";
+                    if (meldung.StartsWith(vorsatz, StringComparison.Ordinal))
+                    {
+                        meldung = meldung.Substring(vorsatz.Length);
+                    }
+                    return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.NichtUebergeben, Meldung = meldung };
                 }
                 throw;
             }
 
-            // Datei liegt im Ordner: jetzt den Dateinamen ohne Pfad in SageHDR.Datei eintragen
-            await _repository.ExportAbschliessenAsync(pa, job.Inhaber, fileName, CancellationToken.None);
-            return fileName;
+            if (!antwort.Erfolg)
+            {
+                // Sage hat abgelehnt: Status "Fehler in Sage" und die Meldung von Sage in SageHDR und SagePos;
+                // der PA kann nach der Korrektur erneut übergeben werden
+                await _repository.ExportAbschliessenAsync(pa, job.Inhaber, SageStatus.FehlerInSage, antwort.Fehlermeldung, null, null, null, CancellationToken.None);
+                return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.Abgelehnt, Meldung = antwort.Fehlermeldung };
+            }
+
+            // Auftrag in Sage angelegt: Status "Alles ok in Sage", eine etwaige Meldung von Sage und die
+            // OfficeLineHandle (SageHDR/SagePos) sowie die OfficeLineVorgangsHandle (SageHDR) eintragen
+            var handle = Handle(antwort.OfficeLineHandle);
+            await _repository.ExportAbschliessenAsync(pa, job.Inhaber, SageStatus.AllesOkInSage, antwort.Fehlermeldung,
+                handle, Handle(antwort.OfficeLineVorgangsHandle), PositionsHandles(paPositions, zeilen, antwort), CancellationToken.None);
+            return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.Uebergeben, OfficeLineHandle = handle, OfficeLineVorgangsHandle = Handle(antwort.OfficeLineVorgangsHandle), Meldung = antwort.Fehlermeldung };
         }
+
+        // OfficeLineHandle der Positionen: je Zeile der Prozedur ein Sample mit einem Package, in derselben Reihenfolge.
+        // Zur Sicherheit muss der LIMSIdentifier des Package zur Zeile passen; sonst wird über einen eindeutigen
+        // LIMSIdentifier gesucht. Ohne passendes Package (oder ohne Zahl als Handle) bleibt SagePos.OfficeLineHandle NULL.
+        private static List<SagePosHandle> PositionsHandles(List<WipPaketAna> positions, List<SagePosZeile> zeilen, SageAntwort antwort)
+        {
+            var handles = new List<SagePosHandle>();
+            for (int i = 0; i < positions.Count; i++)
+            {
+                var lims = FormatValue(GetColumn(positions[i], "LIMSIdentifier"));
+                var package = i < antwort.Packages.Count && antwort.Packages[i].LIMSIdentifier == lims
+                    ? antwort.Packages[i]
+                    : null;
+                if (package == null && !string.IsNullOrEmpty(lims))
+                {
+                    var treffer = antwort.Packages.Where(p => p.LIMSIdentifier == lims).ToList();
+                    package = treffer.Count == 1 ? treffer[0] : null;
+                }
+                var handle = Handle(package?.OfficeLineHandle);
+                if (handle.HasValue)
+                {
+                    handles.Add(new SagePosHandle { PI = zeilen[i].PI, Ulfd = zeilen[i].Ulfd, OfficeLineHandle = handle.Value });
+                }
+            }
+            return handles;
+        }
+
+        private static int? Handle(string value) =>
+            int.TryParse((value ?? "").Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var handle) ? handle : (int?)null;
 
         public async Task<SageExportResult> ExportAsync(ICollection<int> selectedPAs, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
             var job = await PrepareAsync(selectedPAs, inhaber, cancellationToken);
-            var result = new SageExportResult { Folder = job.Folder };
+            var result = new SageExportResult { Url = job.Url };
             foreach (var pa in job.PAs)
             {
-                var fileName = await ExportOneAsync(job, pa, cancellationToken);
-                if (fileName == null)
-                {
-                    result.PAsWithoutPositions.Add(pa);
-                }
-                else
-                {
-                    result.Files.Add(fileName);
-                }
+                result.Schritte.Add(await ExportOneAsync(job, pa, cancellationToken));
             }
             return result;
         }
 
-        public async Task<string> NeuErstellenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task NeuErstellenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Erst in SageHDR beanspruchen (Datei/DateiErstelltAm = NULL, Satz gesperrt), dann die Datei löschen:
-            // so löscht niemand eine Datei, deren PA ein anderer Benutzer gerade hält
+            // In SageHDR zurücksetzen (Status "neu", Satz gesperrt) - danach ist der PA wieder übergebbar
             var anspruch = await _repository.ExportZuruecksetzenAsync(pa, inhaber, cancellationToken);
             if (!anspruch.Erteilt)
             {
@@ -206,50 +301,9 @@ namespace WipSageWeb.Data
                 }
                 if (!string.IsNullOrEmpty(anspruch.GesperrtVon))
                 {
-                    throw new SageExportException($"PA {pa} ist von {anspruch.GesperrtVon} gesperrt und kann nicht neu erstellt werden.");
+                    throw new SageExportException($"PA {pa} ist von {anspruch.GesperrtVon} gesperrt und kann nicht erneut übergeben werden.");
                 }
-                throw new SageExportException($"Für PA {pa} wurde noch keine XML-Datei erzeugt - er kann ganz normal übergeben werden. Bitte die Seite neu laden.");
-            }
-
-            // Ohne Dateiname (Export war unterbrochen) gibt es nichts zu löschen
-            var datei = Path.GetFileName((anspruch.AlteDatei ?? "").Trim());
-            if (datei.Length == 0)
-            {
-                return null;
-            }
-
-            try
-            {
-                var folder = (await _repository.GetSageExportOrdnerAsync(cancellationToken) ?? "").Trim();
-                if (folder.Length == 0 || !Directory.Exists(folder))
-                {
-                    throw new SageExportException(
-                        "Der Export-Ordner für Sage ist nicht gültig oder nicht erreichbar" +
-                        (folder.Length == 0 ? "." : $":\n{folder}") +
-                        "\nOhne ihn lässt sich die alte XML-Datei nicht löschen (Tabelle Konfig, Feld SageExportOrdner).");
-                }
-
-                var path = Path.Combine(folder, datei);
-                if (!File.Exists(path))
-                {
-                    return null;   // schon weg (z. B. von Sage abgeholt) - nichts zu löschen
-                }
-                File.Delete(path);
-                return datei;
-            }
-            catch (Exception ex)
-            {
-                // Alte Datei liegt noch da -> Zustand zurückholen, sonst käme sie neben der neuen Datei zu Sage
-                await _repository.ExportWiederherstellenAsync(pa, inhaber, anspruch.AlteDatei, anspruch.AlterZeitpunkt, anspruch.AlterErsteller, anspruch.AlterStatus, anspruch.AlteMessageVonSage, CancellationToken.None);
-                if (ex is SageExportException)
-                {
-                    throw;
-                }
-                if (ex is IOException || ex is UnauthorizedAccessException)
-                {
-                    throw new SageExportException($"Die alte XML-Datei {datei} konnte nicht gelöscht werden:\n{ex.Message}", ex);
-                }
-                throw;
+                throw new SageExportException($"PA {pa} wurde noch nicht an Sage übergeben - er kann ganz normal übergeben werden. Bitte die Seite neu laden.");
             }
         }
 
@@ -319,7 +373,7 @@ namespace WipSageWeb.Data
         //             Menge              Menge
         //             OfficeLineHandle   nil
         //             OfficeLineItem
-        //               Artikelnummer    ArtikelNR
+        //               Artikelnummer    ArtikelNR; bei Konfig.SageTest = true immer TestArtikelnummer (04005019)
         //             Price              Endpreis
         //     Wkz                  USD = 0 -> "USD", sonst "EUR"
         // ------------------------------------------------------------------------------------------
@@ -331,7 +385,7 @@ namespace WipSageWeb.Data
         private const string ProbeEnglisch = "Your reference:";
         private const string ProbeDeutsch = "Ihre Probe:";
 
-        private static XDocument BuildDocument(int pa, List<WipPaketAna> positions)
+        private static XDocument BuildDocument(int pa, List<WipPaketAna> positions, bool test)
         {
             var head = positions[0];
             var englisch = IstUsdNull(head);
@@ -345,13 +399,13 @@ namespace WipSageWeb.Data
                 Element("LIMSIdentifier", matchcode),
                 Element("Matchcode", matchcode),
                 Element("OfficeLineHandle", null),
-                new XElement(Ns + "Samples", positions.Select(p => BuildSample(p, englisch, matchcode))),
+                new XElement(Ns + "Samples", positions.Select(p => BuildSample(p, englisch, matchcode, test))),
                 Element("Wkz", Waehrung(head)));
 
             return new XDocument(new XDeclaration("1.0", "utf-8", null), order);
         }
 
-        private static XElement BuildSample(WipPaketAna p, bool englisch, string matchcode)
+        private static XElement BuildSample(WipPaketAna p, bool englisch, string matchcode, bool test)
         {
             return new XElement(Ns + "Sample",
                 Element("LIMSIdentifier", FormatValue(GetColumn(p, "LIMSIdentifier"))),
@@ -371,7 +425,7 @@ namespace WipSageWeb.Data
                         Element("Menge", FormatValue(GetColumn(p, "Menge"))),
                         Element("OfficeLineHandle", null),
                         new XElement(Ns + "OfficeLineItem",
-                            Element("Artikelnummer", FormatValue(GetColumn(p, "ArtikelNR")))),
+                            Element("Artikelnummer", test ? TestArtikelnummer : FormatValue(GetColumn(p, "ArtikelNR")))),
                         Element("Price", FormatValue(GetColumn(p, "Endpreis"))))));
         }
 

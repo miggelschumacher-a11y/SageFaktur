@@ -59,32 +59,31 @@ namespace WipSageWeb.Models
         public string GesperrtVon { get; set; }
         public DateTime? GesperrtBis { get; set; }
 
-        /// <summary>Erzeugte XML-Datei, wenn <see cref="Zustand"/> = Uebergeben.</summary>
-        public string Datei { get; set; }
+        /// <summary>Wann der PA an Sage gesendet wurde (SageHDR.AnSageGesendetAm), wenn <see cref="Zustand"/> = Uebergeben.</summary>
         public DateTime? UebergebenAm { get; set; }
 
-        /// <summary>Kurzname des Benutzers, der die XML-Datei erzeugt hat (SageHDR.DateiErstelltVon).</summary>
+        /// <summary>Kurzname des Benutzers, der den PA an Sage gesendet hat (SageHDR.AnSageGesendetVon).</summary>
         public string UebergebenVon { get; set; }
 
-        /// <summary>Status und Meldung von Sage aus SageHDR (Status, MessageVonSage) - nur Anzeige, null wenn leer.</summary>
+        /// <summary>Status, Meldung und OfficeLineHandle von Sage aus SageHDR - nur Anzeige, null wenn leer.</summary>
         public WipSageWeb.Data.SageRueckmeldung SageRueckmeldung { get; set; }
 
         /// <summary>
         /// Ein anderer Benutzer hält eine gültige Sperre auf dem Satz. Bei einem schon übergebenen PA
-        /// (<see cref="Zustand"/> = Uebergeben) heißt das: er wird dort gerade neu erstellt.
+        /// (<see cref="Zustand"/> = Uebergeben) heißt das: er wird dort gerade erneut übergeben.
         /// </summary>
         public bool GesperrtFuerAndere { get; set; }
 
         /// <summary>
         /// Nur bearbeitbare PAs dürfen ausgewählt und an Sage übergeben werden. Schon übergebene PAs sind
         /// nur gesperrt, solange ein anderer Benutzer sie hält - sonst darf der Haken gesetzt werden,
-        /// um die XML-Datei nach Rückfrage neu zu erstellen (siehe <see cref="KannNeuErstelltWerden"/>).
+        /// um den PA nach Rückfrage erneut an Sage zu übergeben (siehe <see cref="KannNeuErstelltWerden"/>).
         /// </summary>
         public bool IsReadOnly => Zustand == PaZustand.Unbekannt
                                   || Zustand == PaZustand.GesperrtVonAnderem
                                   || (Zustand == PaZustand.Uebergeben && GesperrtFuerAndere);
 
-        /// <summary>Schon übergeben und frei: der Haken fragt nach, ob die Datei noch einmal erstellt werden soll.</summary>
+        /// <summary>Schon übergeben und frei: der Haken fragt nach, ob der PA noch einmal an Sage übergeben werden soll.</summary>
         public bool KannNeuErstelltWerden => Zustand == PaZustand.Uebergeben && !GesperrtFuerAndere;
     }
 
@@ -99,7 +98,7 @@ namespace WipSageWeb.Models
         /// <summary>Von einem anderen Benutzer gesperrt - nur Lesen.</summary>
         GesperrtVonAnderem,
 
-        /// <summary>XML-Datei wurde schon erzeugt - nur Lesen, außer der Benutzer lässt sie neu erstellen.</summary>
+        /// <summary>Schon an Sage übergeben - nur Lesen, außer der Benutzer übergibt ihn erneut.</summary>
         Uebergeben
     }
 }
