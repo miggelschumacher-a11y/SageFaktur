@@ -361,7 +361,7 @@ namespace WipSageWeb.Data
                                 SET h.GesperrtBis = DATEADD(MINUTE, @Minuten, GETDATE())
                                 FROM dbo.SageHDR h
                                 WHERE h.GesperrtUserNr = @UserNr
-                                  AND h.GesperrtBis >= GETDATE();";
+                                  AND h.GesperrtBis >= GETDATE();" ;
             return await ExecuteAsync(sql, inhaber, null, cancellationToken);
         }
 
