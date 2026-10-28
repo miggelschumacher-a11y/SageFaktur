@@ -6,6 +6,10 @@
 const WipProgress = (function () {
     const dialog = document.getElementById('progressDialog');
     const text = document.getElementById('progressText');
+    const actions = document.getElementById('progressActions');
+    const cancelButton = document.getElementById('progressCancel');
+    let onCancel = null;
+    if (cancelButton) cancelButton.addEventListener('click', () => { if (onCancel) onCancel(); });
     const bar = dialog && dialog.querySelector('.progress-bar');
     const fill = dialog && dialog.querySelector('.progress-bar-fill');
 
@@ -27,6 +31,15 @@ const WipProgress = (function () {
     }
     function hide() {
         if (dialog) dialog.hidden = true;
+        cancelable(null);
+    }
+
+    // Knopf "Abbrechen" im Popup: mit Funktion einblenden (nur beim Export an Sage), mit null ausblenden.
+    // disabled = true: Knopf sichtbar, aber gesperrt (Abbruch ist schon bestätigt)
+    function cancelable(handler, disabled) {
+        onCancel = handler;
+        if (actions) actions.hidden = !handler;
+        if (cancelButton) cancelButton.disabled = !!disabled;
     }
 
     // Navigation innerhalb der App (Neu laden, Anmelden): die Sperren sollen dabei NICHT freigegeben werden
@@ -45,11 +58,12 @@ const WipProgress = (function () {
     // Zurück-Taste des Browsers holt die Seite aus dem Cache - dann darf kein Popup stehen bleiben
     window.addEventListener('pageshow', hide);
 
-    return { show: show, hide: hide };
+    return { show: show, hide: hide, cancelable: cancelable };
 })();
 
-// Rückfrage-Popup mit OK und Abbrechen (id="confirmDialog"): WipConfirm.ask(text) liefert ein Promise,
+// Rückfrage-Popup mit OK und Abbrechen (id="confirmDialog"): WipConfirm.ask(text, optionen) liefert ein Promise,
 // das mit true (OK) oder false (Abbrechen, Escape) erfüllt wird. Es gibt immer nur eine Rückfrage zugleich.
+// optionen (alle wahlfrei): titel, ok, abbrechen - sonst gelten die Texte aus der View.
 const WipConfirm = (function () {
     const dialog = document.getElementById('confirmDialog');
     if (!dialog) return { ask: () => Promise.resolve(false) };
@@ -57,6 +71,9 @@ const WipConfirm = (function () {
     const text = document.getElementById('confirmText');
     const ok = document.getElementById('confirmOk');
     const cancel = document.getElementById('confirmCancel');
+    const title = document.getElementById('confirmTitle');
+    // Texte aus der View als Vorgabe merken - jede Rückfrage kann sie für sich ändern
+    const vorgabe = { titel: title.textContent, ok: ok.textContent, abbrechen: cancel.textContent };
     let answer = null;
 
     function finish(value) {
@@ -74,13 +91,19 @@ const WipConfirm = (function () {
     window.addEventListener('pageshow', () => finish(false));
 
     return {
-        ask: function (message) {
+        ask: function (message, optionen) {
             finish(false);
+            const o = optionen || {};
+            title.textContent = o.titel || vorgabe.titel;
+            ok.textContent = o.ok || vorgabe.ok;
+            cancel.textContent = o.abbrechen || vorgabe.abbrechen;
             text.textContent = message;   // textContent: kein HTML aus Meldungen
             dialog.hidden = false;
             cancel.focus();   // Abbrechen ist vorbelegt: Enter übergibt nicht aus Versehen erneut an Sage
             return new Promise(resolve => { answer = resolve; });
-        }
+        },
+        // Offene Rückfrage schließen, als hätte der Benutzer "Abbrechen" gewählt
+        close: function () { finish(false); }
     };
 })();
 
@@ -665,12 +688,34 @@ const WipMessage = (function () {
 
     async function run(pas) {
         const steps = [];
+        // Abbrechen im Fortschritts-Popup: erst nachfragen. Solange die Frage offen ist, wird der laufende PA noch
+        // fertig übergeben, aber kein neuer begonnen (rueckfrage). Bestätigt: nach dem laufenden PA aufhören.
+        let abgebrochen = false, rueckfrage = null, laufenderPa = null, fortschritt = null;
+        function abbrechenFragen() {
+            if (rueckfrage || abgebrochen) return;
+            rueckfrage = WipConfirm.ask(
+                'Soll der Export an Sage abgebrochen werden?' +
+                (laufenderPa ? '\n\nPA ' + laufenderPa + ' wird noch fertig übergeben, danach werden keine weiteren PAs gesendet.' : ''),
+                { titel: 'Export abbrechen?', ok: 'Export abbrechen', abbrechen: 'Weiter übergeben' })
+                .then(ja => {
+                    rueckfrage = null;
+                    if (!ja) return;
+                    abgebrochen = true;
+                    WipProgress.cancelable(abbrechenFragen, true);   // Knopf bleibt sichtbar, aber gesperrt
+                    if (fortschritt) WipProgress.show('Abbruch: ' + (laufenderPa ? 'PA ' + laufenderPa + ' wird noch abgeschlossen …' : 'wird beendet …'), fortschritt[0], fortschritt[1]);
+                });
+        }
         try {
             WipProgress.show('Export wird vorbereitet …');
+            WipProgress.cancelable(abbrechenFragen);
             const start = await post(form.dataset.exportStartUrl, pas.map(pa => ['pas', pa]));
 
             for (let i = 0; i < start.pas.length; i++) {
+                if (rueckfrage) await rueckfrage;   // Rückfrage offen: mit dem nächsten PA warten
+                if (abgebrochen) break;
                 const pa = start.pas[i];
+                laufenderPa = pa;
+                fortschritt = [i, start.pas.length];
                 WipProgress.show('PA ' + pa + ' wird an Sage übergeben (' + (i + 1) + ' von ' + start.pas.length + ') …', i, start.pas.length);
                 const step = await post(form.dataset.exportStepUrl, [['exportId', start.exportId], ['pa', pa]]);
                 step.pa = pa;
@@ -683,9 +728,20 @@ const WipMessage = (function () {
                 else if (step.ergebnis === 'KeineAntwort') markExported(pa, null, null, 'XML erzeugt: ' + step.meldung, true);
                 else if (step.ergebnis === 'Abgelehnt') markRejected(pa, 'Fehler in Sage: ' + step.meldung);
                 else if (step.ergebnis === 'NichtUebergeben') markRejected(pa, 'Nicht übergeben: ' + step.meldung);
+                laufenderPa = null;
+            }
+            if (rueckfrage) WipConfirm.close();   // Export ist fertig - eine noch offene Rückfrage erübrigt sich
+            if (abgebrochen) {
+                WipProgress.hide();
+                const rest = start.pas.length - steps.length;
+                WipMessage.show('Der Export wurde abgebrochen.' +
+                    (rest > 0 ? ' ' + rest + ' PA(s) wurden nicht mehr an Sage gesendet und bleiben ausgewählt.' : '') +
+                    '\n\n' + summary(steps), true);
+                return;
             }
             WipProgress.show('Export abgeschlossen.', start.pas.length, start.pas.length);
         } catch (error) {
+            if (rueckfrage) WipConfirm.close();
             WipProgress.hide();
             WipMessage.show(error.message + (steps.length ? '\n\nBis dahin:\n' + summary(steps) : ''), steps.length > 0);
             return;

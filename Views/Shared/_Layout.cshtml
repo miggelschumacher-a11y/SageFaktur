@@ -57,6 +57,10 @@
             <div class="progress-bar" role="progressbar" aria-labelledby="progressText">
                 <div class="progress-bar-fill"></div>
             </div>
+            @* Nur beim Export an Sage sichtbar: fragt nach und bricht nach dem laufenden PA ab (siehe wippa.js) *@
+            <div class="dialog-actions" id="progressActions" hidden>
+                <button type="button" class="btn btn-secondary" id="progressCancel">Abbrechen</button>
+            </div>
         </div>
     </div>
     @await RenderSectionAsync("Scripts", required: false)

@@ -78,6 +78,9 @@ button.app-power img { display: block; width: 30px; height: 30px; }
 
 /* ---- Fortschritts-Popup (mat-progress-bar, mode="indeterminate") ---- */
 .progress-backdrop { z-index: 20; }
+/* Rückfrage (z. B. "Export abbrechen?") liegt über dem Fortschritts-Popup */
+#confirmDialog { z-index: 25; }
+#progressActions { margin-top: 20px; }
 .progress-text { margin: 0 0 16px; font-weight: 500; }
 .progress-bar { position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: rgba(255, 199, 0, .3); }
 .progress-bar-fill {

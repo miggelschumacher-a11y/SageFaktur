@@ -350,7 +350,8 @@
 
 @if (Model.CanWork)
 {
-    @* Rückfrage, wenn bei einem schon übergebenen PA der Haken gesetzt wird (siehe wippa.js, WipConfirm) *@
+    @* Rückfrage, wenn bei einem schon übergebenen PA der Haken gesetzt wird, und beim Abbrechen des Exports
+       (siehe wippa.js, WipConfirm - Titel und Knopftexte setzt das Skript je Rückfrage) *@
     <div class="dialog-backdrop" id="confirmDialog" hidden>
         <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
             <h2 id="confirmTitle" class="dialog-title">Erneut an Sage übergeben?</h2>
