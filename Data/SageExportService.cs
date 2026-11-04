@@ -423,7 +423,7 @@ namespace WipSageWeb.Data
         //         Name             "Your reference:" (USD = 0) bzw. "Ihre Probe:" + Charge1 + Charge2
         //         Packages
         //           Package
-        //             Bezeichnung        ArtikelNR achtstellig mit führenden Nullen; bei Konfig.SageTest = true immer TestArtikelnummer (04005019)
+        //             Bezeichnung        ArtikelNR achtstellig mit führenden Nullen - auch bei Konfig.SageTest = true
         //             Bezeichnung2       nil
         //             Dimensionstext     PBuDat
         //             DiscountPercent    0
@@ -438,7 +438,7 @@ namespace WipSageWeb.Data
         //             Menge              Menge
         //             OfficeLineHandle   nil
         //             OfficeLineItem
-        //               Artikelnummer    wie Bezeichnung
+        //               Artikelnummer    ArtikelNR achtstellig; bei Konfig.SageTest = true immer TestArtikelnummer (04005019)
         //             Price              Endpreis
         //     Wkz                  USD = 0 -> "USD", sonst "EUR"
         // ------------------------------------------------------------------------------------------
@@ -474,13 +474,13 @@ namespace WipSageWeb.Data
         private static XElement BuildSample(WipPaketAna p, bool englisch, bool test)
         {
             var lims = FormatValue(GetColumn(p, "LIMSIdentifier"));
-            var artikelnummer = test ? TestArtikelnummer : Artikelnummer(p);
+            var artikelNr = Artikelnummer(p);
             return new XElement(Ns + "Sample",
                 Element("LIMSIdentifier", lims),
                 Element("Name", SampleName(p, englisch)),
                 new XElement(Ns + "Packages",
                     new XElement(Ns + "Package",
-                        Element("Bezeichnung", artikelnummer),
+                        Element("Bezeichnung", artikelNr),
                         Element("Bezeichnung2", null),
                         Element("Dimensionstext", FormatValue(GetColumn(p, "PBuDat"))),
                         Element("DiscountPercent", "0"),
@@ -494,7 +494,7 @@ namespace WipSageWeb.Data
                         Element("Menge", FormatValue(GetColumn(p, "Menge"))),
                         Element("OfficeLineHandle", null),
                         new XElement(Ns + "OfficeLineItem",
-                            Element("Artikelnummer", artikelnummer)),
+                            Element("Artikelnummer", test ? TestArtikelnummer : artikelNr)),
                         Element("Price", FormatValue(GetColumn(p, "Endpreis"))))));
         }
 
