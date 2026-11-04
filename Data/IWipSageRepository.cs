@@ -24,25 +24,25 @@ namespace WipSageWeb.Data
         Task<bool> GetSageFakturAsync(long userNr, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Legt für jeden PA ohne Eintrag einen Satz in dbo.SageHDR an und sperrt alle PAs, die frei sind,
-        /// deren Sperre abgelaufen ist oder die schon diesem Benutzer gehören (nur noch nicht übergebene).
-        /// Liefert den Zustand jedes PA danach.
+        /// Liest den Zustand der PAs aus dbo.SageHDR (Status, übergeben am/von, Sperre eines laufenden Exports) -
+        /// ohne zu sperren. PAs ohne Satz in SageHDR fehlen im Ergebnis.
         /// </summary>
-        Task<IReadOnlyDictionary<int, SageHdrZustand>> SperrenAsync(IEnumerable<int> pas, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
+        Task<IReadOnlyDictionary<int, SageHdrZustand>> GetSageHdrZustaendeAsync(IEnumerable<int> pas, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Verlängert die noch gültigen Sperren des Benutzers; liefert die Anzahl.</summary>
-        Task<int> SperrenVerlaengernAsync(SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
+        /// <summary>Hebt nach dem Export eines PA die eigene Sperre dieses PA auf.</summary>
+        Task SperreFreigebenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Hebt die Sperren der Seite auf (GesperrtSitzung = "Anmeldung:Seite"), mit <paramref name="ganzeAnmeldung"/>
-        /// die aller Seiten dieser Anmeldung (beim Abmelden); liefert die Anzahl.
+        /// Hebt Sperren auf (GesperrtSitzung = "Anmeldung:Seite"), mit <paramref name="ganzeAnmeldung"/> die aller
+        /// Seiten dieser Anmeldung (beim Abmelden - falls ein Export abgebrochen ist, ohne freizugeben).
         /// </summary>
         Task<int> SperrenFreigebenAsync(SperrInhaber inhaber, bool ganzeAnmeldung, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Beansprucht einen PA direkt vor dem Senden an Sage: setzt Status "XML erzeugt" und AnSageGesendetAm/-Von,
+        /// Sperrt einen PA direkt vor dem Senden an Sage und setzt Status "XML erzeugt" und AnSageGesendetAm/-Von -
         /// nur wenn der PA noch nicht übergeben ist (Status "neu" oder "Fehler in Sage") und kein anderer Benutzer
-        /// ihn gesperrt hat. Damit geht jeder PA nur einmal an Sage. Liefert auch die Werte vor dem Beanspruchen.
+        /// ihn gerade exportiert. Legt den Satz in SageHDR an, falls es ihn noch nicht gibt. Damit geht jeder PA nur
+        /// einmal an Sage. Liefert auch die Werte vor dem Beanspruchen.
         /// </summary>
         Task<ExportAnspruch> ExportBeanspruchenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken));
 

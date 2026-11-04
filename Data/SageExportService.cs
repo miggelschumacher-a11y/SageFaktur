@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,6 +32,12 @@ namespace WipSageWeb.Data
 
         /// <summary>Die Prozedur hat keine abrechenbaren Positionen geliefert; nichts gesendet.</summary>
         KeinePositionen,
+
+        /// <summary>
+        /// Der PA ließ sich nicht sperren, weil ein anderer Benutzer ihn gerade exportiert. Er wird übersprungen,
+        /// der Export läuft weiter; am Ende nennt die Zusammenfassung ihn unter "Konnte nicht gesperrt werden".
+        /// </summary>
+        Gesperrt,
 
         /// <summary>
         /// Fehler, der nur diesen PA betrifft (z. B. HTTP 413 - Auftrag zu groß, fehlerhafte Positionsdaten, inzwischen
@@ -75,6 +82,9 @@ namespace WipSageWeb.Data
         /// <summary>Konfig.SageTest: Testbetrieb - Artikelnummer in den XML-Daten immer die Test-Artikelnummer.</summary>
         public bool Test { get; set; }
 
+        /// <summary>Konfig.SageTestExportOrdner - nur bei <see cref="Test"/> gesetzt: dorthin zusätzlich eine Kopie der XML-Daten.</summary>
+        public string TestExportOrdner { get; set; }
+
         /// <summary>Benutzer, der den Export gestartet hat - nur er darf seine PAs übergeben.</summary>
         public SperrInhaber Inhaber { get; set; }
     }
@@ -101,7 +111,7 @@ namespace WipSageWeb.Data
     }
 
     /// <summary>
-    /// Übergibt die ausgewählten PAs an Sage: je PA ein Auftrag im Order-Format (Beispiel "XML-Struktur-#2.xml"),
+    /// Übergibt die ausgewählten PAs an Sage: je PA ein Auftrag im Order-Format (Struktur siehe BuildDocument),
     /// gefüllt aus dbo.WIPSage_ProcR_getWIP_PaketAnaEx und per POST an die Sage-Schnittstelle gesendet - im Testbetrieb
     /// (Konfig.SageTest = true) an Konfig.SageTestExportURL, sonst an Konfig.SageReleaseExportURL.
     /// </summary>
@@ -112,6 +122,9 @@ namespace WipSageWeb.Data
 
         /// <summary>Artikelnummer, die bei Konfig.SageTest = true in allen Positionen an Sage geht.</summary>
         public const string TestArtikelnummer = "04005019";
+
+        /// <summary>Kostenstelle, die bei Konfig.SageTest = true in allen Positionen an Sage geht.</summary>
+        public const string TestKostenstelle = "S5900000";
 
         private readonly IWipSageRepository _repository;
         private readonly ISageSchnittstelle _sage;
@@ -143,6 +156,7 @@ namespace WipSageWeb.Data
             {
                 Url = url,
                 Test = konfig.Test,
+                TestExportOrdner = konfig.Test && !string.IsNullOrWhiteSpace(konfig.TestExportOrdner) ? konfig.TestExportOrdner.Trim() : null,
                 Inhaber = inhaber
             };
             job.PAs.AddRange(selectedPAs.Distinct().OrderBy(p => p));
@@ -165,7 +179,7 @@ namespace WipSageWeb.Data
                 return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.KeinePositionen };
             }
 
-            // Erst in SageHDR beanspruchen (Status "XML erzeugt", AnSageGesendetAm/-Von), dann senden:
+            // Erst in SageHDR beanspruchen und sperren (Status "XML erzeugt", AnSageGesendetAm/-Von), dann senden:
             // so geht jeder PA höchstens einmal an Sage, auch wenn zwei Benutzer gleichzeitig exportieren
             // Nicht erteilt betrifft nur diesen PA: überspringen, die übrigen PAs werden weiter übergeben
             var anspruch = await _repository.ExportBeanspruchenAsync(pa, job.Inhaber, cancellationToken);
@@ -182,10 +196,34 @@ namespace WipSageWeb.Data
                 }
                 else
                 {
-                    grund = $"Ist von {anspruch.GesperrtVon} gesperrt.";
+                    // Ein anderer Benutzer exportiert den PA gerade - Sperre nicht möglich, die übrigen PAs laufen weiter
+                    return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.Gesperrt, Meldung = $"Wird gerade von {anspruch.GesperrtVon} übergeben." };
                 }
                 return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.NichtUebergeben, Meldung = grund };
             }
+
+            // Der PA ist jetzt gesperrt. Nach diesem PA die Sperre wieder freigeben - auch bei Fehlern und Abbruch.
+            try
+            {
+                return await SendenAsync(job, pa, paPositions, anspruch, cancellationToken);
+            }
+            finally
+            {
+                try
+                {
+                    await _repository.SperreFreigebenAsync(pa, job.Inhaber, CancellationToken.None);
+                }
+                catch (Exception)
+                {
+                    // Freigabe gescheitert (z. B. Datenbank kurz weg): die Sperre läuft nach SageSperre.Minuten ab
+                }
+            }
+        }
+
+        // Positionen in SagePos speichern, Auftrag an Sage senden und das Ergebnis in SageHDR/SagePos eintragen.
+        // Aufruf nur mit erteiltem Anspruch (PA gesperrt, Status "XML erzeugt").
+        private async Task<SageExportSchritt> SendenAsync(SageExportJob job, int pa, List<WipPaketAna> paPositions, ExportAnspruch anspruch, CancellationToken cancellationToken)
+        {
 
             SageAntwort antwort;
             List<SagePosZeile> zeilen;
@@ -195,7 +233,9 @@ namespace WipSageWeb.Data
                 zeilen = SagePosZeilen(pa, paPositions);
                 await _repository.SagePosErsetzenAsync(pa, zeilen, cancellationToken);
 
-                antwort = await _sage.PostXmlTransactionAsync(job.Url, BuildDocument(pa, paPositions, job.Test), cancellationToken);
+                var dokument = BuildDocument(pa, paPositions, job.Test);
+                TestKopieSpeichern(job, pa, dokument);
+                antwort = await _sage.PostXmlTransactionAsync(job.Url, dokument, cancellationToken);
             }
             catch (SageKeineAntwortException)
             {
@@ -247,6 +287,27 @@ namespace WipSageWeb.Data
             await _repository.ExportAbschliessenAsync(pa, job.Inhaber, SageStatus.AllesOkInSage, antwort.Fehlermeldung,
                 handle, Handle(antwort.OfficeLineVorgangsHandle), PositionsHandles(paPositions, zeilen, antwort), CancellationToken.None);
             return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.Uebergeben, OfficeLineHandle = handle, OfficeLineVorgangsHandle = Handle(antwort.OfficeLineVorgangsHandle), Meldung = antwort.Fehlermeldung };
+        }
+
+        // Testbetrieb: Kopie der XML-Daten in Konfig.SageTestExportOrdner, z. B. "PA_41001_20261103_141530.xml" - vor dem
+        // Senden, damit sie auch bei abgelehnten Aufträgen vorliegt. Klappt das Schreiben nicht, wird der PA übersprungen.
+        private static void TestKopieSpeichern(SageExportJob job, int pa, XDocument dokument)
+        {
+            if (job.TestExportOrdner == null)
+            {
+                return;
+            }
+            var datei = Path.Combine(job.TestExportOrdner, $"PA_{pa}_{DateTime.Now:yyyyMMdd_HHmmss}.xml");
+            try
+            {
+                Directory.CreateDirectory(job.TestExportOrdner);
+                dokument.Save(datei);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+            {
+                throw new SageExportException(
+                    $"PA {pa}: Die Kopie der XML-Daten konnte nicht gespeichert werden (Testbetrieb, Konfig.SageTestExportOrdner):\n{datei}\n{ex.Message}", ex);
+            }
         }
 
         // OfficeLineHandle der Positionen: je Zeile der Prozedur ein Sample mit einem Package, in derselben Reihenfolge.
@@ -343,16 +404,18 @@ namespace WipSageWeb.Data
         }
 
         // ------------------------------------------------------------------------------------------
-        // Aufbau der XML-Datei nach dem Beispiel "XML-Struktur-#2.xml" (Order-Format der Sage-Schnittstelle).
-        // Die Werte kommen aus dbo.WIPSage_ProcR_getWIP_PaketAnaEx; Reihenfolge und Elementnamen wie im Beispiel.
-        // Felder ohne Wert aus der Prozedur werden wie im Beispiel als i:nil="true" geschrieben.
+        // Aufbau der XML-Datei nach "XML-Zuordnung-04-11-2026.xml" (Order-Struktur der Sage-Schnittstelle).
+        // Die Werte kommen aus dbo.WIPSage_ProcR_getWIP_PaketAnaEx; Reihenfolge und Elementnamen wie in der Vorgabe.
+        // Felder ohne Wert aus der Prozedur werden als i:nil="true" geschrieben.
         //
         //   Order
         //     DiscountPercent      0
         //     Kopftext             fester Text: USD = 0 -> englisch, sonst deutsch
-        //     Kto                  Kunde_Auftraggeber
-        //     LIMSIdentifier       BelegMatchCode
-        //     Matchcode            BelegMatchCode
+        //     Kto                  Kunde_Auftraggeber, fünfstellig mit führenden Nullen (nur reine Zahlen)
+        //     Liefertermin
+        //       Data               Lieferdatum im Format "2026-02-24 12:00:00 +01" (siehe Liefertermin)
+        //     LIMSIdentifier       BelegMatchCode (PA-Nummer)
+        //     Matchcode            BelegMatchCode (PA-Nummer; eine Spalte "Matchcode" liefert die Prozedur nicht)
         //     OfficeLineHandle     nil
         //     Samples
         //       Sample             je Position (Zeile der Prozedur) ein Sample
@@ -360,20 +423,22 @@ namespace WipSageWeb.Data
         //         Name             "Your reference:" (USD = 0) bzw. "Ihre Probe:" + Charge1 + Charge2
         //         Packages
         //           Package
-        //             Bezeichnung        ArtikelNR
+        //             Bezeichnung        ArtikelNR achtstellig mit führenden Nullen; bei Konfig.SageTest = true immer TestArtikelnummer (04005019)
         //             Bezeichnung2       nil
-        //             Dimensionstext     nil
+        //             Dimensionstext     PBuDat
         //             DiscountPercent    0
         //             EBITCode           nil
         //             Erloeskonto        Konto, fünfstellig mit führenden Nullen
-        //             Kostenstelle       KST
+        //             Kostenstelle       KST; bei Konfig.SageTest = true immer TestKostenstelle (S5900000)
         //             Kostentraeger      nil
+        //             Liefertermin
+        //               Data             Lieferdatum der Position, Format wie oben
         //             LIMSIdentifier     LIMSIdentifier
-        //             Langtext           PBuDat und ArtikelName in einer Zeile
+        //             Langtext           ArtikelName
         //             Menge              Menge
         //             OfficeLineHandle   nil
         //             OfficeLineItem
-        //               Artikelnummer    ArtikelNR; bei Konfig.SageTest = true immer TestArtikelnummer (04005019)
+        //               Artikelnummer    wie Bezeichnung
         //             Price              Endpreis
         //     Wkz                  USD = 0 -> "USD", sonst "EUR"
         // ------------------------------------------------------------------------------------------
@@ -395,38 +460,66 @@ namespace WipSageWeb.Data
                 new XAttribute(XNamespace.Xmlns + "i", Xsi),
                 Element("DiscountPercent", "0"),
                 Element("Kopftext", englisch ? KopftextEnglisch : KopftextDeutsch),
-                Element("Kto", FormatValue(GetColumn(head, "Kunde_Auftraggeber"))),
+                Element("Kto", Kto(head)),
+                Liefertermin(head),
                 Element("LIMSIdentifier", matchcode),
                 Element("Matchcode", matchcode),
                 Element("OfficeLineHandle", null),
-                new XElement(Ns + "Samples", positions.Select(p => BuildSample(p, englisch, matchcode, test))),
+                new XElement(Ns + "Samples", positions.Select(p => BuildSample(p, englisch, test))),
                 Element("Wkz", Waehrung(head)));
 
             return new XDocument(new XDeclaration("1.0", "utf-8", null), order);
         }
 
-        private static XElement BuildSample(WipPaketAna p, bool englisch, string matchcode, bool test)
+        private static XElement BuildSample(WipPaketAna p, bool englisch, bool test)
         {
+            var lims = FormatValue(GetColumn(p, "LIMSIdentifier"));
+            var artikelnummer = test ? TestArtikelnummer : Artikelnummer(p);
             return new XElement(Ns + "Sample",
-                Element("LIMSIdentifier", FormatValue(GetColumn(p, "LIMSIdentifier"))),
+                Element("LIMSIdentifier", lims),
                 Element("Name", SampleName(p, englisch)),
                 new XElement(Ns + "Packages",
                     new XElement(Ns + "Package",
-                        Element("Bezeichnung", FormatValue(GetColumn(p, "ArtikelNR"))),
+                        Element("Bezeichnung", artikelnummer),
                         Element("Bezeichnung2", null),
-                        Element("Dimensionstext", null),
+                        Element("Dimensionstext", FormatValue(GetColumn(p, "PBuDat"))),
                         Element("DiscountPercent", "0"),
                         Element("EBITCode", null),
                         Element("Erloeskonto", Erloeskonto(p)),
-                        Element("Kostenstelle", FormatValue(GetColumn(p, "KST"))),
+                        Element("Kostenstelle", test ? TestKostenstelle : FormatValue(GetColumn(p, "KST"))),
                         Element("Kostentraeger", null),
-                        Element("LIMSIdentifier", FormatValue(GetColumn(p, "LIMSIdentifier"))),
-                        Element("Langtext", Langtext(p)),
+                        Liefertermin(p),
+                        Element("LIMSIdentifier", lims),
+                        Element("Langtext", FormatValue(GetColumn(p, "ArtikelName"))),
                         Element("Menge", FormatValue(GetColumn(p, "Menge"))),
                         Element("OfficeLineHandle", null),
                         new XElement(Ns + "OfficeLineItem",
-                            Element("Artikelnummer", test ? TestArtikelnummer : FormatValue(GetColumn(p, "ArtikelNR")))),
+                            Element("Artikelnummer", artikelnummer)),
                         Element("Price", FormatValue(GetColumn(p, "Endpreis"))))));
+        }
+
+        // <Liefertermin><Data>2026-02-24 12:00:00 +01</Data></Liefertermin> aus der Spalte Lieferdatum: Datum ohne Uhrzeit
+        // gilt als 12:00 Uhr (wie in der Vorgabe), dahinter der Abstand zu UTC an diesem Tag (+01 Winterzeit, +02 Sommerzeit).
+        // Ohne Lieferdatum: <Liefertermin i:nil="true"/>.
+        private static XElement Liefertermin(WipPaketAna p)
+        {
+            var wert = GetColumn(p, "Lieferdatum");
+            DateTime datum;
+            if (wert is DateTime d)
+            {
+                datum = d;
+            }
+            else if (wert == null || !DateTime.TryParse(Convert.ToString(wert, CultureInfo.InvariantCulture), CultureInfo.GetCultureInfo("de-DE"), DateTimeStyles.None, out datum))
+            {
+                return Element("Liefertermin", null);
+            }
+            if (datum.TimeOfDay == TimeSpan.Zero)
+            {
+                datum = datum.Date.AddHours(12);
+            }
+            var termin = new DateTimeOffset(DateTime.SpecifyKind(datum, DateTimeKind.Unspecified), TimeZoneInfo.Local.GetUtcOffset(datum));
+            return new XElement(Ns + "Liefertermin",
+                new XElement(Ns + "Data", termin.ToString("yyyy-MM-dd HH:mm:ss zz", CultureInfo.InvariantCulture)));
         }
 
         // Leere Werte wie im Beispiel als i:nil="true"
@@ -447,9 +540,14 @@ namespace WipSageWeb.Data
         }
 
         // Erlöskonto fünfstellig mit führenden Nullen (4000 -> 04000); was keine Zahl ist, bleibt unverändert
-        private static string Erloeskonto(WipPaketAna p)
+        private static string Erloeskonto(WipPaketAna p) => Fuenfstellig(GetColumn(p, "Konto"));
+
+        // Kto (Kunde_Auftraggeber) fünfstellig mit führenden Nullen (123 -> 00123); Werte mit Buchstaben wie D29375 bleiben unverändert
+        private static string Kto(WipPaketAna p) => Fuenfstellig(GetColumn(p, "Kunde_Auftraggeber"));
+
+        private static string Fuenfstellig(object wert)
         {
-            var konto = FormatValue(GetColumn(p, "Konto"));
+            var konto = FormatValue(wert);
             if (string.IsNullOrWhiteSpace(konto))
             {
                 return null;
@@ -458,14 +556,16 @@ namespace WipSageWeb.Data
             return konto.All(char.IsDigit) && konto.Length < 5 ? konto.PadLeft(5, '0') : konto;
         }
 
-        // PBuDat und ArtikelName in einer Zeile wie im Beispiel; Zeilenumbrüche aus PBuDat werden zu Leerzeichen
-        private static string Langtext(WipPaketAna p)
+        // Artikelnummer achtstellig mit führenden Nullen (4005019 -> 04005019); was keine Zahl ist, bleibt unverändert
+        private static string Artikelnummer(WipPaketAna p)
         {
-            var teile = new[] { FormatValue(GetColumn(p, "PBuDat")), FormatValue(GetColumn(p, "ArtikelName")) }
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => System.Text.RegularExpressions.Regex.Replace(s.Trim(), @"\s*[\r\n]+\s*", " "));
-            var text = string.Join(" ", teile);
-            return text.Length == 0 ? null : text;
+            var nummer = FormatValue(GetColumn(p, "ArtikelNR"));
+            if (string.IsNullOrWhiteSpace(nummer))
+            {
+                return null;
+            }
+            nummer = nummer.Trim();
+            return nummer.All(char.IsDigit) && nummer.Length < 8 ? nummer.PadLeft(8, '0') : nummer;
         }
 
         // Spalte USD = 0 -> englische Texte. Jeder andere Wert (auch NULL) -> deutsche Texte.

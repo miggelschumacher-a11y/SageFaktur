@@ -84,9 +84,16 @@ namespace WipSageWeb.Data
         public string ExportUrlFeld { get; set; }
 
         /// <summary>
+        /// Konfig.SageTestExportOrdner: Ordner, in den bei <see cref="Test"/> = true zusätzlich eine Kopie jeder
+        /// gesendeten XML-Datei geschrieben wird; null, wenn nichts hinterlegt ist (dann keine Kopie).
+        /// </summary>
+        public string TestExportOrdner { get; set; }
+
+        /// <summary>
         /// Konfig.SageTest: Testbetrieb. Dann geht der Auftrag an Konfig.SageTestExportURL (sonst an
-        /// Konfig.SageReleaseExportURL), und in den XML-Daten steht als Artikelnummer immer
-        /// <see cref="SageExportService.TestArtikelnummer"/>.
+        /// Konfig.SageReleaseExportURL), und in den XML-Daten stehen als Artikelnummer immer
+        /// <see cref="SageExportService.TestArtikelnummer"/> und als Kostenstelle immer
+        /// <see cref="SageExportService.TestKostenstelle"/>.
         /// </summary>
         public bool Test { get; set; }
     }

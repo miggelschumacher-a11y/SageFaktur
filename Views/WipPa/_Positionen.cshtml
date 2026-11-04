@@ -1,5 +1,9 @@
-﻿@model IEnumerable<IGrouping<int, WipPaketAna>>
+@model IEnumerable<IGrouping<int, WipPaketAna>>
 @* Akkordeon-Inhalte aller PAs: je PA ein Block, den wippa.js in die passende Zeile einsetzt *@
+@{
+    // Testbetrieb (Konfig.SageTest): in den Spalten Artikel-Nr. und KST stehen die Werte, die an Sage gehen
+    var sageTest = ViewData["SageTest"] as bool? == true;
+}
 @foreach (var pa in Model)
 {
     var kopf = pa.First();
@@ -40,7 +44,14 @@
                     <tr>
                         <td>@pos.PINummer</td>
                         <td class="num">@pos.Ulfd</td>
-                        <td>@pos.ArtikelNR</td>
+                        @if (sageTest)
+                        {
+                            <td class="sage-test" title="Testbetrieb (SageTest) - an Sage geht @WipSageWeb.Data.SageExportService.TestArtikelnummer; echte Artikelnummer: @pos.ArtikelNR">@WipSageWeb.Data.SageExportService.TestArtikelnummer</td>
+                        }
+                        else
+                        {
+                            <td>@pos.ArtikelNR</td>
+                        }
                         <td class="text">@pos.ArtikelName</td>
                         <td class="text pre">@pos.PBuDat</td>
                         <td class="text">@pos.FixParaList</td>
@@ -51,7 +62,14 @@
                         <td class="num">@pos.Menge</td>
                         <td class="num">@(pos.Endpreis?.ToString("N2"))</td>
                         <td>@pos.Konto</td>
-                        <td>@pos.KST</td>
+                        @if (sageTest)
+                        {
+                            <td class="sage-test" title="Testbetrieb (SageTest) - an Sage geht @WipSageWeb.Data.SageExportService.TestKostenstelle; echte Kostenstelle: @pos.KST">@WipSageWeb.Data.SageExportService.TestKostenstelle</td>
+                        }
+                        else
+                        {
+                            <td>@pos.KST</td>
+                        }
                         <td>@pos.LIMSIdentifier</td>
                         <td>@pos.SageRueckmeldung?.StatusText</td>
                         <td class="text">@pos.SageRueckmeldung?.MessageVonSage</td>

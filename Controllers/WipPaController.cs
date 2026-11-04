@@ -12,6 +12,11 @@ using WipSageWeb.Models;
 
 namespace WipSageWeb.Controllers
 {
+    // Seiten und Antworten nicht im Browser zwischenspeichern: sie enthalten frische Daten und Sicherheits-Token.
+    // Sonst kann der Browser (z. B. Firefox beim Zurück-Gehen oder Wiederherstellen eines Tabs) eine alte Seite
+    // zeigen, die nicht mehr zu den aktuellen Skripten passt - dann reagieren z. B. die Anmeldefelder nicht mehr.
+    // Skripte, Stile und Bilder bleiben im Cache; sie tragen eine Versionskennung (asp-append-version).
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public class WipPaController : Controller
     {
         private readonly IWipSageRepository _repository;
@@ -53,7 +58,7 @@ namespace WipSageWeb.Controllers
                 return View(new WipPaListViewModel { IsLoggedIn = true, PopupMessage = NoPermissionMessage });
             }
 
-            // Jedes Laden der Seite bekommt eine eigene Kennung für die Sperren (siehe SperrKennung)
+            // Jedes Laden der Seite bekommt eine eigene Kennung für die Sperren beim Export (siehe SperrKennung)
             var model = await LoadAsync(user, SperrKennung.Neu(), cancellationToken);
             return View(model);
         }
@@ -99,6 +104,17 @@ namespace WipSageWeb.Controllers
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
                     _logger.LogError(ex, "Rückmeldung aus SagePos konnte für PA {PA} nicht gelesen werden", pa);
+                }
+
+                // Testbetrieb (Konfig.SageTest): in den Spalten Artikel-Nr. und KST die Werte zeigen, die an Sage gehen
+                // (SageExportService.TestArtikelnummer / TestKostenstelle) - fehlt die Konfiguration, wie im echten Betrieb
+                try
+                {
+                    ViewData["SageTest"] = (await _repository.GetSageKonfigAsync(cancellationToken)).Test;
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    _logger.LogError(ex, "Konfig.SageTest konnte für die Positionen nicht gelesen werden");
                 }
 
                 return PartialView("_Positionen", positionen);
@@ -181,34 +197,6 @@ namespace WipSageWeb.Controllers
             return RedirectToAction(nameof(Index));
         }
 
-        // POST /WipPa/SperreVerlaengern - die offene Seite meldet sich alle 5 Minuten, damit ihre Sperren nicht ablaufen
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> SperreVerlaengern(string seite, CancellationToken cancellationToken)
-        {
-            var denied = DenyUnlessAuthorized(out var user);
-            if (denied != null)
-            {
-                return denied;
-            }
-            var anzahl = await _repository.SperrenVerlaengernAsync(Inhaber(user, seite), cancellationToken);
-            return Json(new { ok = true, anzahl });
-        }
-
-        // POST /WipPa/SperreFreigeben - beim Verlassen der Seite (navigator.sendBeacon). Gibt nur die Sperren dieser
-        // Seite frei: Bei F5 hat die neu geladene Seite ihre PAs schon mit einer neuen Kennung gesperrt, und die
-        // Freigabe der alten Seite - die auch erst danach ankommen kann - lässt diese Sperren in Ruhe.
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public async Task<IActionResult> SperreFreigeben(string seite, CancellationToken cancellationToken)
-        {
-            if (SperrKennung.IstGueltig(seite))
-            {
-                await SperrenFreigebenAsync(HttpContext.Session.GetLoginUser(), seite, false, cancellationToken);
-            }
-            return NoContent();
-        }
-
         // POST /WipPa/ExportStart - Schritt 1 des Exports mit Fortschrittsanzeige:
         // Adresse der Sage-Schnittstelle prüfen, PAs festlegen. Der vorbereitete Export liegt 15 Minuten im Speicher des Servers.
         [HttpPost]
@@ -278,7 +266,7 @@ namespace WipSageWeb.Controllers
         }
 
         // POST /WipPa/NeuErstellen - der Benutzer hat bei einem schon übergebenen PA den Haken gesetzt und die
-        // Rückfrage mit OK beantwortet: SageHDR.Status wird "neu", der Satz wird für ihn gesperrt.
+        // Rückfrage mit OK beantwortet: SageHDR.Status wird "neu" (gesperrt wird erst beim Export).
         [HttpPost]
         [ValidateAntiForgeryToken]
         public async Task<IActionResult> NeuErstellen(int pa, string seite, CancellationToken cancellationToken)
@@ -356,7 +344,7 @@ namespace WipSageWeb.Controllers
             var model = await LoadAsync(user, SperrKennung.Neu(), cancellationToken);
             foreach (var row in model.Rows)
             {
-                row.IsSelected = row.Zustand == PaZustand.Bearbeitbar && row.PA.HasValue && selectedPAs.Contains(row.PA.Value);
+                row.IsSelected = row.IstAuswaehlbar && row.PA.HasValue && selectedPAs.Contains(row.PA.Value);
             }
             model.PopupMessage = popupMessage;
             model.ErrorMessage = errorMessage ?? model.ErrorMessage;
@@ -397,6 +385,7 @@ namespace WipSageWeb.Controllers
                 }
             }
             Block("Von Sage abgelehnt", SageExportErgebnis.Abgelehnt);
+            Block("Konnte nicht gesperrt werden", SageExportErgebnis.Gesperrt);
             Block("Nicht übergeben", SageExportErgebnis.NichtUebergeben);
             Block("Keine Antwort von Sage", SageExportErgebnis.KeineAntwort);
             Block("Keine abrechenbaren Positionen, nicht übergeben", SageExportErgebnis.KeinePositionen);
@@ -466,18 +455,18 @@ namespace WipSageWeb.Controllers
                 return model;
             }
 
-            // Jeder PA bekommt einen Eintrag in SageHDR und wird für diesen Benutzer gesperrt, wenn er frei ist.
-            // Schlägt das fehl, bleiben alle PAs nur lesbar - sonst könnten PAs doppelt an Sage gehen.
+            // Zustand der PAs aus SageHDR lesen - ohne Sperre (gesperrt wird erst beim Export, je PA).
+            // Schlägt das fehl, bleiben alle PAs nur lesbar - sonst könnten schon übergebene PAs erneut an Sage gehen.
             IReadOnlyDictionary<int, SageHdrZustand> zustaende;
             try
             {
                 var pas = model.Rows.Where(r => r.PA.HasValue).Select(r => r.PA.Value);
-                zustaende = await _repository.SperrenAsync(pas, Inhaber(user, seite), cancellationToken);
+                zustaende = await _repository.GetSageHdrZustaendeAsync(pas, Inhaber(user, seite), cancellationToken);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                _logger.LogError(ex, "PAs konnten in SageHDR nicht gesperrt werden");
-                model.ErrorMessage = $"Die PAs konnten nicht gesperrt werden und sind deshalb nur lesbar: {ex.Message}";
+                _logger.LogError(ex, "Zustand der PAs konnte aus SageHDR nicht gelesen werden");
+                model.ErrorMessage = $"Der Zustand der PAs konnte nicht gelesen werden, sie sind deshalb nur lesbar: {ex.Message}";
                 return model;
             }
 
@@ -502,7 +491,7 @@ namespace WipSageWeb.Controllers
                         row.UebergebenAm = zustand.AnSageGesendetAm;
                         row.UebergebenVon = zustand.AnSageGesendetVon;
 
-                        // Hält ein anderer Benutzer den Satz (er übergibt ihn gerade erneut), bleibt er nur lesbar
+                        // Exportiert ihn gerade ein anderer Benutzer, bleibt er nur lesbar
                         row.GesperrtFuerAndere = zustand.GesperrtFuerAndere;
                         if (zustand.GesperrtFuerAndere)
                         {
@@ -521,6 +510,11 @@ namespace WipSageWeb.Controllers
                         row.Zustand = PaZustand.Bearbeitbar;
                     }
                 }
+                else if (row.PA.HasValue)
+                {
+                    // Noch kein Satz in SageHDR: noch nie übergeben - der Satz entsteht beim ersten Export
+                    row.Zustand = PaZustand.Bearbeitbar;
+                }
 
                 if (row.PA.HasValue && rueckmeldungen.TryGetValue(row.PA.Value, out var rueckmeldung))
                 {
@@ -528,8 +522,8 @@ namespace WipSageWeb.Controllers
                 }
 
                 // Vorausgewählt sind alle PAs, die dieser Benutzer übergeben darf - schon übergebene nie,
-                // sie werden erst nach der Rückfrage zum Neu-Erstellen angehakt
-                row.IsSelected = row.Zustand == PaZustand.Bearbeitbar;
+                // sie werden erst nach der Rückfrage zum Neu-Erstellen angehakt; PAs mit Problem nie
+                row.IsSelected = row.IstAuswaehlbar;
             }
             return model;
         }

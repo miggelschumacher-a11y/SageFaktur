@@ -5,13 +5,14 @@ namespace WipSageWeb.Data
 {
     /// <summary>
     /// Sperrvermerk in dbo.SageHDR (Spalten GesperrtVon, GesperrtUserNr, GesperrtSitzung, GesperrtBis):
-    /// Ein PA, den ein Benutzer geöffnet hat, ist für andere nur lesbar. Beim Schließen des Browsers
-    /// löscht die Seite die Sperren sofort. Klappt das nicht (Absturz, Browser meldet das Schließen nicht),
-    /// läuft die Sperre nach <see cref="Minuten"/> ab und wird beim nächsten Laden oder Verlängern gelöscht.
+    /// Gesperrt wird nur während des Exports, je PA - beim Beanspruchen direkt vor dem Senden an Sage, freigegeben
+    /// gleich nach diesem PA (auch bei Fehlern). Solange ist der PA für andere Benutzer nur lesbar, und ein
+    /// gleichzeitiger Export desselben PA wird übersprungen ("Konnte nicht gesperrt werden"). Bricht ein Export ab,
+    /// ohne freizugeben, läuft die Sperre nach <see cref="Minuten"/> ab und wird beim nächsten Beanspruchen gelöscht.
     /// </summary>
     public static class SageSperre
     {
-        /// <summary>Gültigkeit einer Sperre; die offene Seite verlängert sie jede Minute (wippa.js).</summary>
+        /// <summary>Gültigkeit einer Sperre - länger als die Wartezeit auf Sage (SageSchnittstelle.Wartezeit, 100 s).</summary>
         public const int Minuten = 3;
     }
 
@@ -48,32 +49,26 @@ namespace WipSageWeb.Data
         public string Sitzung => Anmeldung + ":" + Seite;
     }
 
-    /// <summary>Zustand eines PA in dbo.SageHDR nach dem Sperren.</summary>
+    /// <summary>Zustand eines PA in dbo.SageHDR beim Laden der Liste (ohne Sperre gelesen).</summary>
     public sealed class SageHdrZustand
     {
         public int PA { get; set; }
         public string GesperrtVon { get; set; }
         /// <summary>
-        /// Ablaufzeit der Sperre. Bis zu diesem Zeitpunkt gehört der PA dem Benutzer, der ihn gesperrt hat;
+        /// Ablaufzeit der Sperre. Bis zu diesem Zeitpunkt gehört der PA dem Benutzer, der ihn gerade exportiert;
         /// danach gilt er wieder als frei.
         /// </summary>
         /// <remarks>
-        /// Eine Web-App erfährt nicht zuverlässig, wann jemand sie verlässt. Stürzt der Browser ab, fährt der
-        /// Rechner herunter oder kommt die Abmeldung beim Schließen nicht an, wird die Sperre nie aktiv gelöscht.
-        /// Ohne Ablaufzeit blieben solche PAs für alle anderen dauerhaft gesperrt, bis jemand die Sperre von Hand
-        /// aus SageHDR entfernt.
-        /// <para>So arbeitet die App damit:</para>
+        /// Die Sperre gilt nur für die Übertragung eines PA und wird danach sofort freigegeben. Die Ablaufzeit sichert
+        /// den Fall ab, dass das nicht mehr gelingt (Server neu gestartet, Datenbank kurz weg): ohne sie bliebe der PA
+        /// dauerhaft gesperrt.
         /// <list type="bullet">
         /// <item><description>Beim Sperren: GesperrtBis wird auf jetzt plus 3 Minuten gesetzt.</description></item>
-        /// <item><description>Solange die Seite offen ist: Sie meldet sich jede Minute beim Server und schiebt
-        /// GesperrtBis wieder 3 Minuten nach vorn. Eine aktive Sperre läuft so nie ab.</description></item>
-        /// <item><description>Wenn die Seite weg ist: Die Meldungen bleiben aus, und spätestens 3 Minuten später
-        /// ist GesperrtBis überschritten.</description></item>
         /// <item><description>Prüfung, ob ein PA gesperrt ist: Ein PA gilt nur dann als von einem anderen gesperrt,
         /// wenn GesperrtBis noch in der Zukunft liegt. Abgelaufene Sperren zählen nicht, auch wenn die übrigen
         /// Felder noch gefüllt sind.</description></item>
-        /// <item><description>Aufräumen: Bei jedem Laden der Liste und bei jeder Verlängerung löscht der Server
-        /// alle abgelaufenen Sperren aus SageHDR.</description></item>
+        /// <item><description>Aufräumen: Bei jedem Beanspruchen löscht der Server alle abgelaufenen Sperren aus
+        /// SageHDR.</description></item>
         /// </list>
         /// </remarks>
         public DateTime? GesperrtBis { get; set; }

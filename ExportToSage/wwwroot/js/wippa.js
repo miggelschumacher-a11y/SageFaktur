@@ -6,6 +6,10 @@
 const WipProgress = (function () {
     const dialog = document.getElementById('progressDialog');
     const text = document.getElementById('progressText');
+    const actions = document.getElementById('progressActions');
+    const cancelButton = document.getElementById('progressCancel');
+    let onCancel = null;
+    if (cancelButton) cancelButton.addEventListener('click', () => { if (onCancel) onCancel(); });
     const bar = dialog && dialog.querySelector('.progress-bar');
     const fill = dialog && dialog.querySelector('.progress-bar-fill');
 
@@ -27,29 +31,36 @@ const WipProgress = (function () {
     }
     function hide() {
         if (dialog) dialog.hidden = true;
+        cancelable(null);
     }
 
-    // Navigation innerhalb der App (Neu laden, Anmelden): die Sperren sollen dabei NICHT freigegeben werden
+    // Knopf "Abbrechen" im Popup: mit Funktion einblenden (nur beim Export an Sage), mit null ausblenden.
+    // disabled = true: Knopf sichtbar, aber gesperrt (Abbruch ist schon bestätigt)
+    function cancelable(handler, disabled) {
+        onCancel = handler;
+        if (actions) actions.hidden = !handler;
+        if (cancelButton) cancelButton.disabled = !!disabled;
+    }
+
+    // Navigation innerhalb der App (Neu laden, Anmelden): Fortschritts-Popup, bis die neue Seite da ist
     document.querySelectorAll('form[data-progress]').forEach(form =>
-        form.addEventListener('submit', () => { window.wipInAppNavigation = true; show(form.dataset.progress); }));
+        form.addEventListener('submit', () => show(form.dataset.progress)));
 
     document.querySelectorAll('a[data-progress]').forEach(link =>
         link.addEventListener('click', e => {
             // Nur bei normalem Klick - Strg/Shift/Mittelklick öffnen einen neuen Tab
-            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
-                window.wipInAppNavigation = true;
-                show(link.dataset.progress);
-            }
+            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) show(link.dataset.progress);
         }));
 
     // Zurück-Taste des Browsers holt die Seite aus dem Cache - dann darf kein Popup stehen bleiben
     window.addEventListener('pageshow', hide);
 
-    return { show: show, hide: hide };
+    return { show: show, hide: hide, cancelable: cancelable };
 })();
 
-// Rückfrage-Popup mit OK und Abbrechen (id="confirmDialog"): WipConfirm.ask(text) liefert ein Promise,
+// Rückfrage-Popup mit OK und Abbrechen (id="confirmDialog"): WipConfirm.ask(text, optionen) liefert ein Promise,
 // das mit true (OK) oder false (Abbrechen, Escape) erfüllt wird. Es gibt immer nur eine Rückfrage zugleich.
+// optionen (alle wahlfrei): titel, ok, abbrechen - sonst gelten die Texte aus der View.
 const WipConfirm = (function () {
     const dialog = document.getElementById('confirmDialog');
     if (!dialog) return { ask: () => Promise.resolve(false) };
@@ -57,6 +68,9 @@ const WipConfirm = (function () {
     const text = document.getElementById('confirmText');
     const ok = document.getElementById('confirmOk');
     const cancel = document.getElementById('confirmCancel');
+    const title = document.getElementById('confirmTitle');
+    // Texte aus der View als Vorgabe merken - jede Rückfrage kann sie für sich ändern
+    const vorgabe = { titel: title.textContent, ok: ok.textContent, abbrechen: cancel.textContent };
     let answer = null;
 
     function finish(value) {
@@ -74,13 +88,19 @@ const WipConfirm = (function () {
     window.addEventListener('pageshow', () => finish(false));
 
     return {
-        ask: function (message) {
+        ask: function (message, optionen) {
             finish(false);
+            const o = optionen || {};
+            title.textContent = o.titel || vorgabe.titel;
+            ok.textContent = o.ok || vorgabe.ok;
+            cancel.textContent = o.abbrechen || vorgabe.abbrechen;
             text.textContent = message;   // textContent: kein HTML aus Meldungen
             dialog.hidden = false;
             cancel.focus();   // Abbrechen ist vorbelegt: Enter übergibt nicht aus Versehen erneut an Sage
             return new Promise(resolve => { answer = resolve; });
-        }
+        },
+        // Offene Rückfrage schließen, als hätte der Benutzer "Abbrechen" gewählt
+        close: function () { finish(false); }
     };
 })();
 
@@ -142,29 +162,104 @@ const WipConfirm = (function () {
     refresh();
 })();
 
-// Filter neben der Überschrift: Dropdown-Listen mit Mehrfachauswahl (PAs, Kunden, Status).
-// Die Tabelle zeigt nur Zeilen, deren Wert in JEDER Liste angehakt ist. "Alle" / "Keine" schalten eine ganze Liste.
+// Filter neben der Überschrift: Dropdown-Listen mit Mehrfachauswahl (PAs, Kunden-Nr., Kunden, Status).
+// Die Tabelle zeigt nur Zeilen, die zu JEDER Liste passen. "Alle" setzt eine Liste zurück.
+// PAs, Kunden-Nr. und Kunden sind bearbeitbar: der Text im Feld sucht in den Einträgen der Liste (enthält,
+// ohne Groß-/Kleinschreibung). Bei ihnen nimmt ein Haken den Eintrag dazu (nichts angehakt = alle Zeilen),
+// und "Alle" setzt die Auswahl zurück.
+// Dazu kommen die Suchfilter in der zweiten Kopfzeile der Tabelle (Kunden-Nr., Kunde, Sperrflag) - auch sie
+// müssen passen, damit eine Zeile angezeigt wird.
 (function () {
     const rows = Array.from(document.querySelectorAll('tr.pa-row'));
     const empty = document.getElementById('filterEmpty');
 
     const filters = Array.from(document.querySelectorAll('.pa-filter')).map(box => ({
         box: box,
-        attr: box.dataset.rowAttr,          // data-Attribut der Tabellenzeile: "pa", "kunde" oder "status"
+        attr: box.dataset.rowAttr,          // data-Attribut der Tabellenzeile: "pa", "kundenr", "kunde" oder "status"
         name: box.dataset.name,
         toggle: box.querySelector('.pa-filter-toggle'),
+        search: box.querySelector('.pa-filter-search'),   // nur bei bearbeitbaren Listen
         panel: box.querySelector('.pa-filter-panel'),
         label: box.querySelector('.pa-filter-label'),
+        leer: box.querySelector('.pa-filter-leer'),
+        weitere: box.querySelector('.pa-filter-weitere'),
+        // Zusatz (Kunden-Nr.): Haken nehmen Einträge dazu - nichts angehakt = alle Zeilen, sonst nur die angehakten
+        zusatz: !!box.dataset.zusatz,
         items: Array.from(box.querySelectorAll('input.pa-filter-item'))
     }));
-    if (filters.length === 0) return;
+
+    // Suchfilter der zweiten Kopfzeile: PA, Kunden-Nr., Kunde - die Zeile passt, wenn ihr Wert die Eingabe enthält.
+    // Status, Sperrflag, Rechnungszeit und Problem sind Dropdowns mit Mehrfachauswahl (.col-combo): Pfeil oder Klick ins Feld öffnet die
+    // Liste mit allen Werten, Tippen sucht darin. Nichts angehakt = alle Zeilen, sonst nur die angehakten Werte.
+    const columns = Array.from(document.querySelectorAll('input.col-filter')).map(input => {
+        const combo = input.closest('.col-combo');
+        const options = combo ? Array.from(combo.querySelectorAll('.col-combo-option')) : [];
+        return {
+            input: input,
+            attr: input.dataset.colAttr,
+            match: input.dataset.match,
+            combo: combo,
+            panel: combo ? combo.querySelector('.col-combo-panel') : null,
+            toggle: combo ? combo.querySelector('.col-combo-toggle') : null,
+            leer: combo ? combo.querySelector('.col-combo-leer') : null,
+            options: options,
+            items: combo ? Array.from(combo.querySelectorAll('input.col-combo-item')) : [],
+            // Hat die Liste keinen Eintrag "(leer)" (z. B. Status), werden Zeilen ohne Wert nie ausgeblendet
+            hatLeer: combo ? !!combo.querySelector('input.col-combo-item[value="(leer)"]') : false,
+            alle: combo ? combo.querySelector('.col-combo-alle') : null
+        };
+    });
+    if (filters.length === 0 && columns.length === 0) return;
+
+    const wrap = document.querySelector('.table-wrap');
+    let eigenesScrollen = false;   // true: das nächste scroll-Ereignis stammt von apply()
+
+    // Anfangszustand beim Laden erzwingen: Firefox stellt beim Neu laden Häkchen und Feldinhalte wieder her, ohne dass
+    // ein change-Ereignis kommt - die Filter würden dann mit alten, unsichtbaren Haken arbeiten (z. B. "alle PAs
+    // angehakt" aus einer früheren Version). Deshalb: Zusatz-Listen ohne Haken, sonst alle angehakt, Suchfelder leer.
+    filters.forEach(f => {
+        f.items.forEach(i => { i.checked = !f.zusatz; });
+        if (f.search) f.search.value = '';
+    });
+    columns.forEach(c => {
+        c.input.value = '';
+        c.items.forEach(i => { i.checked = false; });
+    });
+
+    // Nur Ziffern zulassen (PAs, Kunden-Nr.) - auch beim Einfügen aus der Zwischenablage
+    function nurZiffern(input) {
+        if (input.dataset.ziffern && /\D/.test(input.value)) input.value = input.value.replace(/\D/g, '');
+    }
+
+    function passt(column, row) {
+        const value = (row.dataset[column.attr] || '').trim();
+        if (column.combo) {
+            // Mehrfachauswahl: nichts angehakt = alle; "(leer)" steht für Zeilen ohne Wert
+            if (column.chosen.size === 0) return true;
+            if (value === '' && !column.hatLeer) return true;
+            return column.chosen.has(value === '' ? '(leer)' : value);
+        }
+        const query = column.input.value.trim();
+        return query === '' || value.toLowerCase().indexOf(query.toLowerCase()) >= 0;
+    }
 
     function apply() {
         filters.forEach(f => {
             f.chosen = new Set(f.items.filter(i => i.checked).map(i => i.value));
-            f.label.textContent = f.chosen.size === f.items.length ? 'Alle ' + f.name + ' (' + f.items.length + ')'
+            const text = f.chosen.size === f.items.length || (f.zusatz && f.chosen.size === 0) ? 'Alle ' + f.name + ' (' + f.items.length + ')'
                 : f.chosen.size === 0 ? 'Keine ' + f.name + ' ausgewählt'
                 : f.chosen.size + ' von ' + f.items.length + ' ' + f.name;
+            // Bearbeitbare Liste: Auswahl als Platzhalter im Suchfeld (sichtbar, solange nichts eingetippt ist)
+            if (f.search) f.search.placeholder = text; else if (f.label) f.label.textContent = text;
+            weitereAnzeigen(f);
+        });
+        columns.filter(c => c.combo).forEach(c => {
+            const gewaehlt = c.items.filter(i => i.checked);
+            c.chosen = new Set(gewaehlt.map(i => i.value));
+            // Auswahl als Platzhalter im Feld: "Alle", bis zu drei Einträge (ihr Text, z. B. "Fehler in Sage") oder "n ausgewählt"
+            const texte = gewaehlt.map(i => i.closest('.col-combo-option').textContent.trim());
+            c.input.placeholder = texte.length === 0 ? 'Alle' : texte.length <= 3 ? texte.join(', ') : texte.length + ' ausgewählt';
+            if (c.alle) c.alle.classList.toggle('aktiv', gewaehlt.length === 0);
         });
 
         let shown = 0;
@@ -172,9 +267,10 @@ const WipConfirm = (function () {
             // Zeilen ohne Wert (keine PA-Nummer / kein Kundenname) lassen sich in der jeweiligen Liste
             // nicht abwählen und werden von ihr nicht ausgeblendet
             const hide = filters.some(f => {
+                if (f.zusatz && f.chosen.size === 0) return false;   // nichts angehakt = alle
                 const value = row.dataset[f.attr];
                 return value !== '' && value !== undefined && !f.chosen.has(value);
-            });
+            }) || columns.some(c => !passt(c, row));
             row.hidden = hide;
             if (!hide) shown++;
 
@@ -186,7 +282,42 @@ const WipConfirm = (function () {
         });
         if (empty) empty.hidden = rows.length === 0 || shown > 0;
 
+        // Nach jeder Filteränderung an den Anfang der Tabelle: war sie heruntergescrollt, lägen die ersten Treffer
+        // sonst verdeckt oberhalb des sichtbaren Bereichs (die Kopfzeilen bleiben oben stehen)
+        if (wrap && wrap.scrollTop > 0) {
+            eigenesScrollen = true;
+            wrap.scrollTop = 0;
+        }
+
         document.dispatchEvent(new Event('wip:filter'));   // Zähler und "Alle auswählen" nachziehen
+    }
+
+    // Einträge der Liste nach dem Suchtext ein- und ausblenden
+    function suchen(f) {
+        const query = f.search ? f.search.value.trim().toLowerCase() : '';
+        let treffer = 0;
+        f.items.forEach(i => {
+            const option = i.closest('.pa-filter-option');
+            const zeigen = query === '' || option.textContent.trim().toLowerCase().indexOf(query) >= 0;
+            option.hidden = !zeigen;
+            if (zeigen) treffer++;
+        });
+        if (f.leer) f.leer.hidden = treffer > 0;
+        weitereAnzeigen(f);
+    }
+
+    // Zusatz-Listen: angehakte Einträge, die die Suche gerade ausblendet, als Hinweis in der Liste nennen -
+    // sonst wirkt der Filter, als zeige er Zeilen, die gar nicht angehakt sind
+    function weitereAnzeigen(f) {
+        if (!f.weitere) return;
+        const versteckt = f.zusatz ? f.items.filter(i => i.checked && i.closest('.pa-filter-option').hidden).length : 0;
+        f.weitere.hidden = versteckt === 0;
+        f.weitere.textContent = 'Außerdem angehakt: ' + versteckt + ' (nicht in der Suche)';
+    }
+
+    // Einträge, die die Suche gerade zeigt (für Listen ohne Zusatz: "Alle" hakt nur die gefundenen an)
+    function sichtbareItems(f) {
+        return f.items.filter(i => !i.closest('.pa-filter-option').hidden);
     }
 
     function open(f, show) {
@@ -199,21 +330,119 @@ const WipConfirm = (function () {
             const show = f.panel.hidden;
             filters.forEach(other => open(other, false));   // immer nur eine Liste offen
             open(f, show);
+            if (show && f.search) f.search.focus();
         });
+        if (f.search) {
+            // Tippen im Feld öffnet die Liste und sucht darin
+            f.search.addEventListener('focus', () => {
+                if (f.ohneOeffnen) { f.ohneOeffnen = false; return; }   // Escape: Fokus zurück, Liste bleibt zu
+                filters.forEach(other => { if (other !== f) open(other, false); });
+                open(f, true);
+            });
+            f.search.addEventListener('input', () => {
+                nurZiffern(f.search);
+                suchen(f);
+                filters.forEach(other => { if (other !== f) open(other, false); });   // immer nur eine Liste offen
+                open(f, true);
+            });
+        }
         f.items.forEach(i => i.addEventListener('change', apply));
-        // "Alle"/"Keine" gibt es nicht bei jeder Liste (beim Status nicht)
-        const alle = f.box.querySelector('[id$=All]'), keine = f.box.querySelector('[id$=None]');
-        if (alle) alle.addEventListener('click', () => { f.items.forEach(i => { i.checked = true; }); apply(); });
-        if (keine) keine.addEventListener('click', () => { f.items.forEach(i => { i.checked = false; }); apply(); });
+        // "Alle" gibt es nicht bei jeder Liste (beim Status nicht)
+        const alle = f.box.querySelector('[id$=All]');
+        if (alle) alle.addEventListener('click', () => {
+            if (f.zusatz) {
+                // Zusatz-Listen: Auswahl zurücksetzen - keine Haken, Suche leer, die Tabelle zeigt alle Zeilen
+                f.items.forEach(i => { i.checked = false; });
+                if (f.search) f.search.value = '';
+                suchen(f);
+            } else {
+                sichtbareItems(f).forEach(i => { i.checked = true; });
+            }
+            apply();
+        });
+    });
+
+    // Dropdown einer Spalte (Status, Sperrflag, Rechnungszeit). Die Liste liegt fest über der Seite (position: fixed) - im scrollenden
+    // Tabellenbereich würde sie sonst bei wenigen Zeilen abgeschnitten.
+    function comboOpen(c, show) {
+        if (!c.panel) return;
+        if (show) {
+            const rect = c.combo.getBoundingClientRect();
+            c.panel.style.top = (rect.bottom + 2) + 'px';
+            c.panel.style.left = rect.left + 'px';
+            c.panel.style.minWidth = rect.width + 'px';
+        } else if (!c.panel.hidden) {
+            // Beim Schließen den Suchtext leeren - das Feld zeigt dann wieder die Auswahl
+            c.input.value = '';
+            comboSuchen(c, '');
+        }
+        c.panel.hidden = !show;
+        c.toggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+    }
+
+    // Liste nach dem Suchtext einschränken. Ohne Argument: der Text im Feld (beim Tippen);
+    // beim Öffnen wird '' übergeben - dann stehen immer alle Werte zur Wahl, auch wenn schon einer gewählt ist
+    function comboSuchen(c, text) {
+        const query = (text === undefined ? c.input.value : text).trim().toLowerCase();
+        let treffer = 0;
+        c.options.forEach(o => {
+            // "Alle" steht immer oben in der Liste
+            const zeigen = o.dataset.value === '' || query === '' || query === 'alle' || o.textContent.trim().toLowerCase().indexOf(query) >= 0;
+            o.hidden = !zeigen;
+            if (zeigen && o.dataset.value !== '') treffer++;
+        });
+        if (c.leer) c.leer.hidden = treffer > 0 || query === '' || query === 'alle';
+    }
+
+    const combos = columns.filter(c => c.combo);
+    combos.forEach(c => {
+        c.input.addEventListener('focus', () => {
+            c.input.value = '';
+            comboSuchen(c, '');
+            comboOpen(c, true);
+        });
+        c.input.addEventListener('input', () => { comboSuchen(c); comboOpen(c, true); });
+        c.toggle.addEventListener('click', () => {
+            const show = c.panel.hidden;
+            comboOpen(c, show);
+            if (show) { comboSuchen(c, ''); c.input.focus(); }
+        });
+        // Häkchen: die Liste bleibt offen, damit weitere Werte dazugenommen werden können
+        c.options.forEach(o => o.addEventListener('mousedown', e => e.preventDefault()));   // Fokus bleibt im Feld
+        c.items.forEach(i => i.addEventListener('change', apply));
+        // "Alle": alle Haken entfernen - die Tabelle zeigt wieder alle Zeilen
+        if (c.alle) c.alle.addEventListener('mousedown', () => {
+            c.items.forEach(i => { i.checked = false; });
+            comboOpen(c, false);
+            apply();
+        });
+    });
+    // Beim Scrollen des Tabellenbereichs oder Ändern der Fenstergröße passt die feste Position nicht mehr: Liste schließen.
+    // Ausnahme: das Zurückscrollen nach einer Filteränderung (apply) - die Kopfzeile mit der Liste bleibt dabei stehen.
+    if (wrap) wrap.addEventListener('scroll', () => {
+        if (eigenesScrollen) { eigenesScrollen = false; return; }
+        combos.forEach(c => comboOpen(c, false));
+    });
+    window.addEventListener('resize', () => combos.forEach(c => comboOpen(c, false)));
+
+    // Suchfelder PA, Kunden-Nr., Kunde filtern beim Tippen die Tabelle (bei den Dropdowns sucht das Tippen nur in der Liste)
+    columns.filter(c => !c.combo).forEach(c => {
+        c.input.addEventListener('input', () => { nurZiffern(c.input); apply(); });
     });
 
     // Klick außerhalb oder Escape schließt die offene Liste
     document.addEventListener('click', e => {
-        filters.forEach(f => { if (!f.panel.hidden && !f.panel.contains(e.target) && !f.toggle.contains(e.target)) open(f, false); });
+        filters.forEach(f => { if (!f.panel.hidden && !f.box.contains(e.target)) open(f, false); });
+        combos.forEach(c => { if (!c.panel.hidden && !c.combo.contains(e.target)) comboOpen(c, false); });
     });
     document.addEventListener('keydown', e => {
         if (e.key !== 'Escape') return;
-        filters.forEach(f => { if (!f.panel.hidden) { open(f, false); f.toggle.focus(); } });
+        combos.forEach(c => comboOpen(c, false));
+        filters.forEach(f => {
+            if (f.panel.hidden) return;
+            open(f, false);
+            if (f.search) { f.ohneOeffnen = document.activeElement !== f.search; f.search.focus(); } else f.toggle.focus();
+        });
     });
 
     apply();
@@ -377,6 +606,7 @@ const WipMessage = (function () {
             gruppen.forEach((pas, text) => { if (text) zeilen.push('• ' + text); zeilen.push('PA ' + pas.join(', ')); });
         }
         block('Von Sage abgelehnt', 'Abgelehnt');
+        block('Konnte nicht gesperrt werden', 'Gesperrt');
         block('Nicht übergeben', 'NichtUebergeben');
         block('Keine Antwort von Sage', 'KeineAntwort');
         block('Keine abrechenbaren Positionen, nicht übergeben', 'KeinePositionen');
@@ -412,7 +642,7 @@ const WipMessage = (function () {
         rowsOf(pa).forEach(row => {
             const box = row.querySelector('input.row-select');
             box.checked = false;
-            box.disabled = false;
+            box.disabled = row.classList.contains('has-problem');   // PA mit Problem bleibt gesperrt
             box.dataset.uebergeben = '1';
             box.title = 'Haken setzen, um den PA noch einmal an Sage zu übergeben';
             row.classList.remove('selected');
@@ -460,12 +690,34 @@ const WipMessage = (function () {
 
     async function run(pas) {
         const steps = [];
+        // Abbrechen im Fortschritts-Popup: erst nachfragen. Solange die Frage offen ist, wird der laufende PA noch
+        // fertig übergeben, aber kein neuer begonnen (rueckfrage). Bestätigt: nach dem laufenden PA aufhören.
+        let abgebrochen = false, rueckfrage = null, laufenderPa = null, fortschritt = null;
+        function abbrechenFragen() {
+            if (rueckfrage || abgebrochen) return;
+            rueckfrage = WipConfirm.ask(
+                'Soll der Export an Sage abgebrochen werden?' +
+                (laufenderPa ? '\n\nPA ' + laufenderPa + ' wird noch fertig übergeben, danach werden keine weiteren PAs gesendet.' : ''),
+                { titel: 'Export abbrechen?', ok: 'Export abbrechen', abbrechen: 'Weiter übergeben' })
+                .then(ja => {
+                    rueckfrage = null;
+                    if (!ja) return;
+                    abgebrochen = true;
+                    WipProgress.cancelable(abbrechenFragen, true);   // Knopf bleibt sichtbar, aber gesperrt
+                    if (fortschritt) WipProgress.show('Abbruch: ' + (laufenderPa ? 'PA ' + laufenderPa + ' wird noch abgeschlossen …' : 'wird beendet …'), fortschritt[0], fortschritt[1]);
+                });
+        }
         try {
             WipProgress.show('Export wird vorbereitet …');
+            WipProgress.cancelable(abbrechenFragen);
             const start = await post(form.dataset.exportStartUrl, pas.map(pa => ['pas', pa]));
 
             for (let i = 0; i < start.pas.length; i++) {
+                if (rueckfrage) await rueckfrage;   // Rückfrage offen: mit dem nächsten PA warten
+                if (abgebrochen) break;
                 const pa = start.pas[i];
+                laufenderPa = pa;
+                fortschritt = [i, start.pas.length];
                 WipProgress.show('PA ' + pa + ' wird an Sage übergeben (' + (i + 1) + ' von ' + start.pas.length + ') …', i, start.pas.length);
                 const step = await post(form.dataset.exportStepUrl, [['exportId', start.exportId], ['pa', pa]]);
                 step.pa = pa;
@@ -478,9 +730,21 @@ const WipMessage = (function () {
                 else if (step.ergebnis === 'KeineAntwort') markExported(pa, null, null, 'XML erzeugt: ' + step.meldung, true);
                 else if (step.ergebnis === 'Abgelehnt') markRejected(pa, 'Fehler in Sage: ' + step.meldung);
                 else if (step.ergebnis === 'NichtUebergeben') markRejected(pa, 'Nicht übergeben: ' + step.meldung);
+                else if (step.ergebnis === 'Gesperrt') markRejected(pa, 'Nicht gesperrt: ' + step.meldung);
+                laufenderPa = null;
+            }
+            if (rueckfrage) WipConfirm.close();   // Export ist fertig - eine noch offene Rückfrage erübrigt sich
+            if (abgebrochen) {
+                WipProgress.hide();
+                const rest = start.pas.length - steps.length;
+                WipMessage.show('Der Export wurde abgebrochen.' +
+                    (rest > 0 ? ' ' + rest + ' PA(s) wurden nicht mehr an Sage gesendet und bleiben ausgewählt.' : '') +
+                    '\n\n' + summary(steps), true);
+                return;
             }
             WipProgress.show('Export abgeschlossen.', start.pas.length, start.pas.length);
         } catch (error) {
+            if (rueckfrage) WipConfirm.close();
             WipProgress.hide();
             WipMessage.show(error.message + (steps.length ? '\n\nBis dahin:\n' + summary(steps) : ''), steps.length > 0);
             return;
@@ -509,7 +773,7 @@ const WipMessage = (function () {
 // Neu erstellen: Bei einem schon übergebenen PA, den kein anderer Benutzer sperrt, bleibt der Haken aktiv
 // (data-uebergeben). Beim Anhaken fragt ein Popup mit OK und Abbrechen, ob der PA noch einmal an Sage übergeben werden soll.
 // - Abbrechen: der Haken wird wieder entfernt, es passiert nichts.
-// - OK: der Server setzt SageHDR.Status auf "neu" und sperrt den Satz für diesen Benutzer.
+// - OK: der Server setzt SageHDR.Status auf "neu" (gesperrt wird erst beim Export).
 //   Die Zeile ist danach ein ganz normaler, angehakter PA und wird mit "An Sage übergeben" erneut gesendet.
 (function () {
     const form = document.getElementById('exportForm');
@@ -561,7 +825,7 @@ const WipMessage = (function () {
             const confirmed = await WipConfirm.ask(
                 'PA ' + pa + ' wurde bereits an Sage übergeben (' + wann + ').' +
                 '\n\nSoll der PA noch einmal an Sage übergeben werden?\nBitte vorher in Sage prüfen, dass der Auftrag dort nicht ' +
-                'schon angelegt ist. Mit OK wird der PA für Sie gesperrt und kann erneut übergeben werden.');
+                'schon angelegt ist. Mit OK kann der PA erneut übergeben werden.');
             box.disabled = false;
 
             if (!confirmed) {
@@ -584,48 +848,4 @@ const WipMessage = (function () {
             }
         });
     });
-})();
-
-// Sperren der PAs in SageHDR: solange die Seite offen ist, jede Minute verlängern.
-// Beim Verlassen der Seite (Schließen, F5, Wechsel zur Hauptseite) werden die Sperren dieser Seite aus SageHDR
-// gelöscht - nur ihre eigenen (Kennung "Seite"): eine schon neu geladene Seite hat ihre PAs mit einer neuen
-// Kennung gesperrt und behält sie, auch wenn die Freigabe erst danach ankommt. Kommt die Freigabe nicht an (Absturz), laufen sie nach
-// 3 Minuten ab (SageSperre.Minuten) und werden beim nächsten Laden bzw. Verlängern gelöscht.
-(function () {
-    const table = document.querySelector('table.grid');
-    const verlaengernUrl = table && table.dataset.sperreVerlaengernUrl;
-    const freigebenUrl = table && table.dataset.sperreFreigebenUrl;
-    const tokenInput = document.querySelector('#exportForm input[name=__RequestVerificationToken]');
-    const seiteInput = document.querySelector('#exportForm input[name=Seite]');
-    if (!verlaengernUrl || !freigebenUrl || !tokenInput) return;   // nicht angemeldet oder ohne Berechtigung
-
-    function formData() {
-        const data = new FormData();
-        data.append('__RequestVerificationToken', tokenInput.value);
-        // Kennung dieser Seite: die Freigabe löscht nur ihre Sperren, nicht die einer schon neu geladenen Seite (F5)
-        if (seiteInput) data.append('Seite', seiteInput.value);
-        return data;
-    }
-
-    setInterval(() => {
-        fetch(verlaengernUrl, { method: 'POST', body: formData(), credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-            .catch(() => { /* nächster Versuch in 5 Minuten */ });
-    }, 60 * 1000);
-
-    // Abmelden über das Power-Symbol gibt die Sperren auf dem Server frei - kein zweiter Aufruf nötig
-    document.querySelectorAll('form.app-logout').forEach(f => f.addEventListener('submit', () => { window.wipInAppNavigation = true; }));
-
-    // Freigabe genau einmal schicken - je nach Browser kommt beim Schließen pagehide, beforeunload oder beides
-    let freigegeben = false;
-    function freigeben() {
-        if (window.wipInAppNavigation || freigegeben) return;
-        freigegeben = true;
-        if (navigator.sendBeacon && navigator.sendBeacon(freigebenUrl, formData())) return;
-        // Ohne sendBeacon: Anfrage, die das Schließen der Seite überlebt
-        fetch(freigebenUrl, { method: 'POST', body: formData(), credentials: 'same-origin', keepalive: true }).catch(() => { });
-    }
-    window.addEventListener('pagehide', freigeben);
-    window.addEventListener('beforeunload', freigeben);
-    // Zurück-Taste: Seite kommt aus dem Cache, die Sperren wurden beim Verlassen freigegeben -> neu laden
-    window.addEventListener('pageshow', e => { if (e.persisted) window.location.reload(); else freigegeben = false; });
 })();

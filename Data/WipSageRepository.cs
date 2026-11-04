@@ -77,7 +77,6 @@ namespace WipSageWeb.Data
                     int oSperrflag = reader.GetOrdinal("Sperrflag");
                     int oRechnungszeit = reader.GetOrdinal("Rechnungszeit");
                     int oProblem = reader.GetOrdinal("Problem");
-                    int oPAVersion = reader.GetOrdinal("PAVersion");
                     int oEndpreisSum = reader.GetOrdinal("EndpreisSum");
                     int oRueckmeldung = reader.GetOrdinal("RueckmeldungSchnittstelle");
 
@@ -94,7 +93,6 @@ namespace WipSageWeb.Data
                             Sperrflag = GetShort(reader, oSperrflag),
                             Rechnungszeit = GetShort(reader, oRechnungszeit),
                             Problem = GetString(reader, oProblem),
-                            PAVersion = GetInt(reader, oPAVersion),
                             EndpreisSum = GetDecimal(reader, oEndpreisSum),
                             RueckmeldungSchnittstelle = GetString(reader, oRueckmeldung)
                         });
@@ -183,8 +181,9 @@ namespace WipSageWeb.Data
         public async Task<SageKonfig> GetSageKonfigAsync(CancellationToken cancellationToken = default(CancellationToken))
         {
             using (var connection = new SqlConnection(_connectionString))
-            // SageTest entscheidet, welche Adresse gilt: true -> SageTestExportURL, false -> SageReleaseExportURL
-            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL from dbo.Konfig order by ID;", connection))
+            // SageTest entscheidet, welche Adresse gilt: true -> SageTestExportURL, false -> SageReleaseExportURL.
+            // SageTestExportOrdner: im Testbetrieb zusätzlich eine Kopie der XML-Daten dorthin
+            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner from dbo.Konfig order by ID;", connection))
             {
                 await connection.OpenAsync(cancellationToken);
                 using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -198,7 +197,8 @@ namespace WipSageWeb.Data
                     {
                         Test = test,
                         ExportUrl = GetString(reader, test ? 1 : 2),
-                        ExportUrlFeld = test ? "SageTestExportURL" : "SageReleaseExportURL"
+                        ExportUrlFeld = test ? "SageTestExportURL" : "SageReleaseExportURL",
+                        TestExportOrdner = GetString(reader, 3)
                     };
                 }
             }
@@ -252,45 +252,18 @@ namespace WipSageWeb.Data
         private const string NochNichtUebergeben = "ISNULL(h.Status, @StatusNeu) NOT IN (@StatusXmlErzeugt, @StatusAllesOk)";
         private const string Uebergeben = "ISNULL(h.Status, @StatusNeu) IN (@StatusXmlErzeugt, @StatusAllesOk)";
 
-        private const string SperrenSql = @"
+        // Zustand der PAs beim Laden der Liste - nur lesen, keine Sperre (gesperrt wird erst beim Export, je PA).
+        // PAs ohne Satz in SageHDR fehlen im Ergebnis und gelten als "neu"; der Satz entsteht beim ersten Export.
+        private const string ZustandSql = @"
                                             SET NOCOUNT ON;
-                                            SET XACT_ABORT ON;
 
-                                            DECLARE @p TABLE (PA int PRIMARY KEY);
-                                            INSERT INTO @p (PA)
-                                            SELECT DISTINCT x.v.value('.', 'int')
-                                            FROM @PAs.nodes('/p') AS x(v);
+                                            SELECT h.PA, h.GesperrtVon, h.GesperrtBis, h.Status
+                                                    , CAST(CASE WHEN h.GesperrtBis >= GETDATE() AND ISNULL(h.GesperrtUserNr, -1) <> @UserNr THEN 1 ELSE 0 END AS bit) AS GesperrtFuerAndere
+                                                    , h.AnSageGesendetAm, h.AnSageGesendetVon
+                                            FROM dbo.SageHDR h
+                                            INNER JOIN (SELECT DISTINCT x.v.value('.', 'int') AS PA FROM @PAs.nodes('/p') AS x(v)) p ON p.PA = h.PA;";
 
-                                            BEGIN TRANSACTION;
-                                                " + AbgelaufeneLoeschenSql + @"
-
-                                                -- Kopfsatz für jeden PA anlegen, den es in SageHDR noch nicht gibt.
-                                                -- UPDLOCK, HOLDLOCK: zwei gleichzeitige Aufrufe legen denselben PA nicht doppelt an.
-                                                INSERT INTO dbo.SageHDR (PA, AngelegtAm, AngelegtVon, Status)
-                                                SELECT p.PA, GETDATE(), @Kurzname, @StatusNeu
-                                                FROM @p p
-                                                WHERE NOT EXISTS (SELECT 1 FROM dbo.SageHDR h WITH (UPDLOCK, HOLDLOCK) WHERE h.PA = p.PA);
-
-                                                -- Freie und eigene PAs sperren, solange sie noch nicht an Sage übergeben sind
-                                                UPDATE h
-                                                SET   h.GesperrtVon     = @Kurzname
-                                                    , h.GesperrtUserNr  = @UserNr
-                                                    , h.GesperrtSitzung = @Sitzung
-                                                    , h.GesperrtBis     = DATEADD(MINUTE, @Minuten, GETDATE())
-                                                FROM dbo.SageHDR h
-                                                INNER JOIN @p p ON p.PA = h.PA
-                                                WHERE " + NochNichtUebergeben + @"
-                                                    AND " + FreiFuerBenutzer + @";
-
-                                                COMMIT TRANSACTION;
-
-                                                SELECT h.PA, h.GesperrtVon, h.GesperrtBis, h.Status
-                                                        , CAST(CASE WHEN h.GesperrtBis >= GETDATE() AND ISNULL(h.GesperrtUserNr, -1) <> @UserNr THEN 1 ELSE 0 END AS bit) AS GesperrtFuerAndere
-                                                        , h.AnSageGesendetAm, h.AnSageGesendetVon
-                                                FROM dbo.SageHDR h
-                                                INNER JOIN @p p ON p.PA = h.PA;";
-
-        public async Task<IReadOnlyDictionary<int, SageHdrZustand>> SperrenAsync(IEnumerable<int> pas, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<IReadOnlyDictionary<int, SageHdrZustand>> GetSageHdrZustaendeAsync(IEnumerable<int> pas, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
             var result = new Dictionary<int, SageHdrZustand>();
             var liste = pas.Distinct().ToList();
@@ -303,7 +276,7 @@ namespace WipSageWeb.Data
             var xml = string.Concat(liste.Select(pa => "<p>" + pa.ToString(CultureInfo.InvariantCulture) + "</p>"));
 
             using (var connection = new SqlConnection(_connectionString))
-            using (var command = new SqlCommand(SperrenSql, connection))
+            using (var command = new SqlCommand(ZustandSql, connection))
             {
                 command.Parameters.Add("@PAs", SqlDbType.Xml).Value = xml;
                 AddInhaber(command, inhaber);
@@ -317,25 +290,9 @@ namespace WipSageWeb.Data
                         {
                             PA = reader.GetInt32(0),
                             GesperrtVon = GetString(reader, 1),
-                            // GesperrtBis: Ablaufzeit der Sperre. Bis zu diesem Zeitpunkt gehört der PA dem Benutzer,
-                            // der ihn gesperrt hat; danach gilt er wieder als frei.
-                            //
-                            // Eine Web-App erfährt nicht zuverlässig, wann jemand sie verlässt. Stürzt der Browser ab,
-                            // fährt der Rechner herunter oder kommt die Abmeldung beim Schließen nicht an, wird die
-                            // Sperre nie aktiv gelöscht. Ohne Ablaufzeit blieben solche PAs für alle anderen dauerhaft
-                            // gesperrt, bis jemand die Sperre von Hand aus SageHDR entfernt.
-                            //
-                            // So arbeitet die App damit:
-                            // - Beim Sperren: GesperrtBis wird auf jetzt plus 3 Minuten gesetzt.
-                            // - Solange die Seite offen ist: Sie meldet sich jede Minute beim Server und schiebt
-                            //   GesperrtBis wieder 3 Minuten nach vorn. Eine aktive Sperre läuft so nie ab.
-                            // - Wenn die Seite weg ist: Die Meldungen bleiben aus, und spätestens 3 Minuten später
-                            //   ist GesperrtBis überschritten.
-                            // - Prüfung, ob ein PA gesperrt ist: Ein PA gilt nur dann als von einem anderen gesperrt,
-                            //   wenn GesperrtBis noch in der Zukunft liegt. Abgelaufene Sperren zählen nicht, auch wenn
-                            //   die übrigen Felder noch gefüllt sind.
-                            // - Aufräumen: Bei jedem Laden der Liste und bei jeder Verlängerung löscht der Server alle
-                            //   abgelaufenen Sperren aus SageHDR.
+                            // GesperrtBis: Ablaufzeit der Sperre, die ein Export für die Dauer der Übertragung eines PA
+                            // setzt (siehe ExportBeanspruchenAsync). Gilt nur, solange sie in der Zukunft liegt - bricht
+                            // ein Export ab, ohne die Sperre freizugeben, ist der PA nach SageSperre.Minuten wieder frei.
                             GesperrtBis = GetDateTime(reader, 2),
                             Status = GetStatus(reader, 3),
                             GesperrtFuerAndere = reader.GetBoolean(4),
@@ -349,20 +306,22 @@ namespace WipSageWeb.Data
             return result;
         }
 
-        public async Task<int> SperrenVerlaengernAsync(SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task SperreFreigebenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
+            // Nach dem Export eines PA: nur die eigene Sperre dieses PA aufheben
             const string sql = @"
-                                SET NOCOUNT ON;
-                                " + AbgelaufeneLoeschenSql + @"
-                                SET NOCOUNT OFF;
-                                -- Alle noch gültigen Sperren des Benutzers verlängern - auch die von PAs,
-                                -- die er schon an Sage übergeben hat (sie bleiben bis zum Verlassen der Seite gesperrt)
                                 UPDATE h
-                                SET h.GesperrtBis = DATEADD(MINUTE, @Minuten, GETDATE())
+                                SET   h.GesperrtVon = NULL
+                                    , h.GesperrtUserNr = NULL
+                                    , h.GesperrtSitzung = NULL
+                                    , h.GesperrtBis = NULL
                                 FROM dbo.SageHDR h
-                                WHERE h.GesperrtUserNr = @UserNr
-                                  AND h.GesperrtBis >= GETDATE();";
-            return await ExecuteAsync(sql, inhaber, null, cancellationToken);
+                                WHERE h.PA = @PA
+                                  AND h.GesperrtSitzung = @Sitzung;";
+            await ExecuteAsync(sql, inhaber, command =>
+            {
+                command.Parameters.Add("@PA", SqlDbType.Int).Value = pa;
+            }, cancellationToken);
         }
 
         public async Task<int> SperrenFreigebenAsync(SperrInhaber inhaber, bool ganzeAnmeldung, CancellationToken cancellationToken = default(CancellationToken))
@@ -388,11 +347,24 @@ namespace WipSageWeb.Data
 
         public async Task<ExportAnspruch> ExportBeanspruchenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Ein einziges UPDATE mit Bedingung: von zwei gleichzeitigen Aufrufen kann nur einer gewinnen.
-            // Status "XML erzeugt" und AnSageGesendetAm/-Von werden direkt vor dem Senden gesetzt; die alten Werte
-            // kommen zurück, damit sie wiederhergestellt werden können, falls das Senden scheitert.
+            // Hier wird der PA gesperrt - beim Laden der Liste nicht mehr. Ein einziges UPDATE mit Bedingung: von zwei
+            // gleichzeitigen Aufrufen kann nur einer gewinnen. Sperre, Status "XML erzeugt" und AnSageGesendetAm/-Von
+            // werden direkt vor dem Senden gesetzt; die alten Werte kommen zurück, damit sie wiederhergestellt werden
+            // können, falls das Senden scheitert. Freigegeben wird die Sperre nach dem PA (SperreFreigebenAsync).
             const string sql = @"
                                 SET NOCOUNT ON;
+                                SET XACT_ABORT ON;
+
+                                -- Abgelaufene Sperren löschen (Export abgebrochen, ohne die Sperre freizugeben)
+                                " + AbgelaufeneLoeschenSql + @"
+
+                                -- Kopfsatz anlegen, falls es den PA in SageHDR noch nicht gibt.
+                                -- UPDLOCK, HOLDLOCK: zwei gleichzeitige Aufrufe legen denselben PA nicht doppelt an.
+                                BEGIN TRANSACTION;
+                                INSERT INTO dbo.SageHDR (PA, AngelegtAm, AngelegtVon, Status)
+                                SELECT @PA, GETDATE(), @Kurzname, @StatusNeu
+                                WHERE NOT EXISTS (SELECT 1 FROM dbo.SageHDR h WITH (UPDLOCK, HOLDLOCK) WHERE h.PA = @PA);
+                                COMMIT TRANSACTION;
 
                                 DECLARE @Alt TABLE (Status tinyint NULL, GesendetAm datetime NULL, GesendetVon nvarchar(30) NULL);
 
@@ -530,7 +502,7 @@ namespace WipSageWeb.Data
 
         public async Task<NeuErstellenAnspruch> ExportZuruecksetzenAsync(int pa, SperrInhaber inhaber, CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Übergebenen PA wieder auf "neu" setzen und für den Benutzer sperren - in einem UPDATE mit Bedingung:
+            // Übergebenen PA wieder auf "neu" setzen (ohne Sperre - gesperrt wird erst beim Export) - in einem UPDATE mit Bedingung:
             // von zwei gleichzeitigen Aufrufen (oder einem laufenden Export desselben PA) kann nur einer gewinnen.
             // AnSageGesendetAm/-Von bleiben stehen (letzte Übertragung), bis der PA erneut gesendet wird.
             const string sql = @"
@@ -543,10 +515,6 @@ namespace WipSageWeb.Data
                                 UPDATE h
                                 SET   h.Status          = @StatusNeu
                                     , h.MessageVonSage  = NULL
-                                    , h.GesperrtVon     = @Kurzname
-                                    , h.GesperrtUserNr  = @UserNr
-                                    , h.GesperrtSitzung = @Sitzung
-                                    , h.GesperrtBis     = DATEADD(MINUTE, @Minuten, GETDATE())
                                 FROM dbo.SageHDR h
                                 WHERE h.PA = @PA
                                     AND " + Uebergeben + @"

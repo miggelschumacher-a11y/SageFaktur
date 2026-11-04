@@ -42,17 +42,14 @@ const WipProgress = (function () {
         if (cancelButton) cancelButton.disabled = !!disabled;
     }
 
-    // Navigation innerhalb der App (Neu laden, Anmelden): die Sperren sollen dabei NICHT freigegeben werden
+    // Navigation innerhalb der App (Neu laden, Anmelden): Fortschritts-Popup, bis die neue Seite da ist
     document.querySelectorAll('form[data-progress]').forEach(form =>
-        form.addEventListener('submit', () => { window.wipInAppNavigation = true; show(form.dataset.progress); }));
+        form.addEventListener('submit', () => show(form.dataset.progress)));
 
     document.querySelectorAll('a[data-progress]').forEach(link =>
         link.addEventListener('click', e => {
             // Nur bei normalem Klick - Strg/Shift/Mittelklick öffnen einen neuen Tab
-            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) {
-                window.wipInAppNavigation = true;
-                show(link.dataset.progress);
-            }
+            if (e.button === 0 && !e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey) show(link.dataset.progress);
         }));
 
     // Zurück-Taste des Browsers holt die Seite aus dem Cache - dann darf kein Popup stehen bleiben
@@ -192,7 +189,7 @@ const WipConfirm = (function () {
     }));
 
     // Suchfilter der zweiten Kopfzeile: PA, Kunden-Nr., Kunde - die Zeile passt, wenn ihr Wert die Eingabe enthält.
-    // Sperrflag und Rechnungszeit sind Dropdowns mit Mehrfachauswahl (.col-combo): Pfeil oder Klick ins Feld öffnet die
+    // Status, Sperrflag, Rechnungszeit und Problem sind Dropdowns mit Mehrfachauswahl (.col-combo): Pfeil oder Klick ins Feld öffnet die
     // Liste mit allen Werten, Tippen sucht darin. Nichts angehakt = alle Zeilen, sonst nur die angehakten Werte.
     const columns = Array.from(document.querySelectorAll('input.col-filter')).map(input => {
         const combo = input.closest('.col-combo');
@@ -207,6 +204,8 @@ const WipConfirm = (function () {
             leer: combo ? combo.querySelector('.col-combo-leer') : null,
             options: options,
             items: combo ? Array.from(combo.querySelectorAll('input.col-combo-item')) : [],
+            // Hat die Liste keinen Eintrag "(leer)" (z. B. Status), werden Zeilen ohne Wert nie ausgeblendet
+            hatLeer: combo ? !!combo.querySelector('input.col-combo-item[value="(leer)"]') : false,
             alle: combo ? combo.querySelector('.col-combo-alle') : null
         };
     });
@@ -237,6 +236,7 @@ const WipConfirm = (function () {
         if (column.combo) {
             // Mehrfachauswahl: nichts angehakt = alle; "(leer)" steht für Zeilen ohne Wert
             if (column.chosen.size === 0) return true;
+            if (value === '' && !column.hatLeer) return true;
             return column.chosen.has(value === '' ? '(leer)' : value);
         }
         const query = column.input.value.trim();
@@ -254,11 +254,12 @@ const WipConfirm = (function () {
             weitereAnzeigen(f);
         });
         columns.filter(c => c.combo).forEach(c => {
-            const werte = c.items.filter(i => i.checked).map(i => i.value);
-            c.chosen = new Set(werte);
-            // Auswahl als Platzhalter im Feld: "Alle", bis zu drei Werte oder "n ausgewählt"
-            c.input.placeholder = werte.length === 0 ? 'Alle' : werte.length <= 3 ? werte.join(', ') : werte.length + ' ausgewählt';
-            if (c.alle) c.alle.classList.toggle('aktiv', werte.length === 0);
+            const gewaehlt = c.items.filter(i => i.checked);
+            c.chosen = new Set(gewaehlt.map(i => i.value));
+            // Auswahl als Platzhalter im Feld: "Alle", bis zu drei Einträge (ihr Text, z. B. "Fehler in Sage") oder "n ausgewählt"
+            const texte = gewaehlt.map(i => i.closest('.col-combo-option').textContent.trim());
+            c.input.placeholder = texte.length === 0 ? 'Alle' : texte.length <= 3 ? texte.join(', ') : texte.length + ' ausgewählt';
+            if (c.alle) c.alle.classList.toggle('aktiv', gewaehlt.length === 0);
         });
 
         let shown = 0;
@@ -361,7 +362,7 @@ const WipConfirm = (function () {
         });
     });
 
-    // Dropdown einer Spalte (Sperrflag, Rechnungszeit). Die Liste liegt fest über der Seite (position: fixed) - im scrollenden
+    // Dropdown einer Spalte (Status, Sperrflag, Rechnungszeit). Die Liste liegt fest über der Seite (position: fixed) - im scrollenden
     // Tabellenbereich würde sie sonst bei wenigen Zeilen abgeschnitten.
     function comboOpen(c, show) {
         if (!c.panel) return;
@@ -605,6 +606,7 @@ const WipMessage = (function () {
             gruppen.forEach((pas, text) => { if (text) zeilen.push('• ' + text); zeilen.push('PA ' + pas.join(', ')); });
         }
         block('Von Sage abgelehnt', 'Abgelehnt');
+        block('Konnte nicht gesperrt werden', 'Gesperrt');
         block('Nicht übergeben', 'NichtUebergeben');
         block('Keine Antwort von Sage', 'KeineAntwort');
         block('Keine abrechenbaren Positionen, nicht übergeben', 'KeinePositionen');
@@ -640,7 +642,7 @@ const WipMessage = (function () {
         rowsOf(pa).forEach(row => {
             const box = row.querySelector('input.row-select');
             box.checked = false;
-            box.disabled = false;
+            box.disabled = row.classList.contains('has-problem');   // PA mit Problem bleibt gesperrt
             box.dataset.uebergeben = '1';
             box.title = 'Haken setzen, um den PA noch einmal an Sage zu übergeben';
             row.classList.remove('selected');
@@ -728,6 +730,7 @@ const WipMessage = (function () {
                 else if (step.ergebnis === 'KeineAntwort') markExported(pa, null, null, 'XML erzeugt: ' + step.meldung, true);
                 else if (step.ergebnis === 'Abgelehnt') markRejected(pa, 'Fehler in Sage: ' + step.meldung);
                 else if (step.ergebnis === 'NichtUebergeben') markRejected(pa, 'Nicht übergeben: ' + step.meldung);
+                else if (step.ergebnis === 'Gesperrt') markRejected(pa, 'Nicht gesperrt: ' + step.meldung);
                 laufenderPa = null;
             }
             if (rueckfrage) WipConfirm.close();   // Export ist fertig - eine noch offene Rückfrage erübrigt sich
@@ -770,7 +773,7 @@ const WipMessage = (function () {
 // Neu erstellen: Bei einem schon übergebenen PA, den kein anderer Benutzer sperrt, bleibt der Haken aktiv
 // (data-uebergeben). Beim Anhaken fragt ein Popup mit OK und Abbrechen, ob der PA noch einmal an Sage übergeben werden soll.
 // - Abbrechen: der Haken wird wieder entfernt, es passiert nichts.
-// - OK: der Server setzt SageHDR.Status auf "neu" und sperrt den Satz für diesen Benutzer.
+// - OK: der Server setzt SageHDR.Status auf "neu" (gesperrt wird erst beim Export).
 //   Die Zeile ist danach ein ganz normaler, angehakter PA und wird mit "An Sage übergeben" erneut gesendet.
 (function () {
     const form = document.getElementById('exportForm');
@@ -822,7 +825,7 @@ const WipMessage = (function () {
             const confirmed = await WipConfirm.ask(
                 'PA ' + pa + ' wurde bereits an Sage übergeben (' + wann + ').' +
                 '\n\nSoll der PA noch einmal an Sage übergeben werden?\nBitte vorher in Sage prüfen, dass der Auftrag dort nicht ' +
-                'schon angelegt ist. Mit OK wird der PA für Sie gesperrt und kann erneut übergeben werden.');
+                'schon angelegt ist. Mit OK kann der PA erneut übergeben werden.');
             box.disabled = false;
 
             if (!confirmed) {
@@ -845,48 +848,4 @@ const WipMessage = (function () {
             }
         });
     });
-})();
-
-// Sperren der PAs in SageHDR: solange die Seite offen ist, jede Minute verlängern.
-// Beim Verlassen der Seite (Schließen, F5, Wechsel zur Hauptseite) werden die Sperren dieser Seite aus SageHDR
-// gelöscht - nur ihre eigenen (Kennung "Seite"): eine schon neu geladene Seite hat ihre PAs mit einer neuen
-// Kennung gesperrt und behält sie, auch wenn die Freigabe erst danach ankommt. Kommt die Freigabe nicht an (Absturz), laufen sie nach
-// 3 Minuten ab (SageSperre.Minuten) und werden beim nächsten Laden bzw. Verlängern gelöscht.
-(function () {
-    const table = document.querySelector('table.grid');
-    const verlaengernUrl = table && table.dataset.sperreVerlaengernUrl;
-    const freigebenUrl = table && table.dataset.sperreFreigebenUrl;
-    const tokenInput = document.querySelector('#exportForm input[name=__RequestVerificationToken]');
-    const seiteInput = document.querySelector('#exportForm input[name=Seite]');
-    if (!verlaengernUrl || !freigebenUrl || !tokenInput) return;   // nicht angemeldet oder ohne Berechtigung
-
-    function formData() {
-        const data = new FormData();
-        data.append('__RequestVerificationToken', tokenInput.value);
-        // Kennung dieser Seite: die Freigabe löscht nur ihre Sperren, nicht die einer schon neu geladenen Seite (F5)
-        if (seiteInput) data.append('Seite', seiteInput.value);
-        return data;
-    }
-
-    setInterval(() => {
-        fetch(verlaengernUrl, { method: 'POST', body: formData(), credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-            .catch(() => { /* nächster Versuch in 5 Minuten */ });
-    }, 60 * 1000);
-
-    // Abmelden über das Power-Symbol gibt die Sperren auf dem Server frei - kein zweiter Aufruf nötig
-    document.querySelectorAll('form.app-logout').forEach(f => f.addEventListener('submit', () => { window.wipInAppNavigation = true; }));
-
-    // Freigabe genau einmal schicken - je nach Browser kommt beim Schließen pagehide, beforeunload oder beides
-    let freigegeben = false;
-    function freigeben() {
-        if (window.wipInAppNavigation || freigegeben) return;
-        freigegeben = true;
-        if (navigator.sendBeacon && navigator.sendBeacon(freigebenUrl, formData())) return;
-        // Ohne sendBeacon: Anfrage, die das Schließen der Seite überlebt
-        fetch(freigebenUrl, { method: 'POST', body: formData(), credentials: 'same-origin', keepalive: true }).catch(() => { });
-    }
-    window.addEventListener('pagehide', freigeben);
-    window.addEventListener('beforeunload', freigeben);
-    // Zurück-Taste: Seite kommt aus dem Cache, die Sperren wurden beim Verlassen freigegeben -> neu laden
-    window.addEventListener('pageshow', e => { if (e.persisted) window.location.reload(); else freigegeben = false; });
 })();

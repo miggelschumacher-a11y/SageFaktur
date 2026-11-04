@@ -39,10 +39,6 @@ namespace WipSageWeb.Models
         [Display(Name = "Problem")]
         public string Problem { get; set; }
 
-        // StandortInfo.dbo.SafePA.PAVersion ist int NOT NULL, per LEFT JOIN in der SP aber ggf. NULL
-        [Display(Name = "PA-Version")]
-        public int? PAVersion { get; set; }
-
         [Display(Name = "Endpreis Summe")]
         [DisplayFormat(DataFormatString = "{0:N2}")]
         public decimal? EndpreisSum { get; set; }
@@ -79,12 +75,19 @@ namespace WipSageWeb.Models
         /// nur gesperrt, solange ein anderer Benutzer sie hält - sonst darf der Haken gesetzt werden,
         /// um den PA nach Rückfrage erneut an Sage zu übergeben (siehe <see cref="KannNeuErstelltWerden"/>).
         /// </summary>
-        public bool IsReadOnly => Zustand == PaZustand.Unbekannt
+        public bool IsReadOnly => HatProblem
+                                  || Zustand == PaZustand.Unbekannt
                                   || Zustand == PaZustand.GesperrtVonAnderem
                                   || (Zustand == PaZustand.Uebergeben && GesperrtFuerAndere);
 
         /// <summary>Schon übergeben und frei: der Haken fragt nach, ob der PA noch einmal an Sage übergeben werden soll.</summary>
-        public bool KannNeuErstelltWerden => Zustand == PaZustand.Uebergeben && !GesperrtFuerAndere;
+        public bool KannNeuErstelltWerden => !HatProblem && Zustand == PaZustand.Uebergeben && !GesperrtFuerAndere;
+
+        /// <summary>Feld Problem gefüllt: der PA ist nicht auswählbar und wird nicht an Sage übergeben.</summary>
+        public bool HatProblem => !string.IsNullOrWhiteSpace(Problem);
+
+        /// <summary>Vorausgewählt bzw. auswählbar: bearbeitbar und ohne Problem.</summary>
+        public bool IstAuswaehlbar => Zustand == PaZustand.Bearbeitbar && !HatProblem;
     }
 
     public enum PaZustand
