@@ -368,28 +368,29 @@ namespace WipSageWeb.Data
             }
         }
 
-        // Positionen des PA für dbo.SagePos. PI ohne das Präfix "PI" (die Prozedur liefert "PI" + WorkInProgress.PI),
+        // Positionen des PA für dbo.SagePos. PI = die zehn Ziffern hinter "PI" in PINummer (WipPaketAna.PI),
         // Artikelname auf die 40 Zeichen der Spalte gekürzt. Fehlt PI, Ulfd oder Artikelnummer, bricht der Export ab.
         private static List<SagePosZeile> SagePosZeilen(int pa, List<WipPaketAna> positions)
         {
             var zeilen = new List<SagePosZeile>();
             foreach (var p in positions)
             {
-                var pi = (p.PINummer ?? "").Trim();
-                if (pi.StartsWith("PI", StringComparison.OrdinalIgnoreCase))
+                var pi = p.PI;
+                if (pi == null)
                 {
-                    pi = pi.Substring(2);
+                    throw new SageExportException(
+                        $"PA {pa}: In der PI-Nummer \"{p.PINummer}\" steht kein \"PI\" mit zehn Ziffern dahinter ({p.LIMSIdentifier}).\nDie Position kann nicht in SagePos gespeichert werden.");
                 }
                 var artikelNr = (p.ArtikelNR ?? "").Trim();
-                if (pi.Length == 0 || !p.Ulfd.HasValue || artikelNr.Length == 0)
+                if (!p.Ulfd.HasValue || artikelNr.Length == 0)
                 {
                     throw new SageExportException(
-                        $"PA {pa}: Eine Position hat keine PI-Nummer, keine Ulfd oder keine Artikelnummer ({p.LIMSIdentifier}).\nSie kann nicht in SagePos gespeichert werden.");
+                        $"PA {pa}: Eine Position hat keine Ulfd oder keine Artikelnummer ({p.LIMSIdentifier}).\nSie kann nicht in SagePos gespeichert werden.");
                 }
-                if (pi.Length > 10 || artikelNr.Length > 10 || p.Ulfd.Value < 0 || p.Ulfd.Value > 255)
+                if (artikelNr.Length > 10 || p.Ulfd.Value < 0 || p.Ulfd.Value > 255)
                 {
                     throw new SageExportException(
-                        $"PA {pa}: PI-Nummer \"{pi}\", Ulfd {p.Ulfd} oder Artikelnummer \"{artikelNr}\" passt nicht in SagePos.");
+                        $"PA {pa}: Ulfd {p.Ulfd} oder Artikelnummer \"{artikelNr}\" passt nicht in SagePos.");
                 }
                 var name = (p.ArtikelName ?? "").Trim();
                 zeilen.Add(new SagePosZeile
@@ -412,18 +413,17 @@ namespace WipSageWeb.Data
         //     DiscountPercent      0
         //     Kopftext             fester Text: USD = 0 -> englisch, sonst deutsch
         //     Kto                  Kunde_Auftraggeber, fünfstellig mit führenden Nullen (nur reine Zahlen)
+        //     LIMSIdentifier       BelegMatchCode (PA-Nummer)
         //     Liefertermin
         //       Data               Lieferdatum im Format "2026-02-24 12:00:00 +01" (siehe Liefertermin)
-        //     LIMSIdentifier       BelegMatchCode (PA-Nummer)
         //     Matchcode            BelegMatchCode (PA-Nummer; eine Spalte "Matchcode" liefert die Prozedur nicht)
         //     OfficeLineHandle     nil
         //     Samples
-        //       Sample             je Position (Zeile der Prozedur) ein Sample
-        //         LIMSIdentifier   LIMSIdentifier
-        //         Name             "Your reference:" (USD = 0) bzw. "Ihre Probe:" + Charge1 + Charge2
+        //       Sample             je Position (Zeile der Prozedur) ein Sample (ohne LIMSIdentifier - der steht im Package)
+        //         Name             zeilenweise: PA (nur im ersten Sample des PA), Charge1, Charge2, PINummer
         //         Packages
         //           Package
-        //             Bezeichnung        ArtikelNR achtstellig mit führenden Nullen - auch bei Konfig.SageTest = true
+        //             Bezeichnung        ArtikelNR ohne führende Nullen (003053 -> 3053) - auch bei Konfig.SageTest = true
         //             Bezeichnung2       nil
         //             Dimensionstext     PBuDat
         //             DiscountPercent    0
@@ -431,14 +431,14 @@ namespace WipSageWeb.Data
         //             Erloeskonto        Konto, fünfstellig mit führenden Nullen
         //             Kostenstelle       KST; bei Konfig.SageTest = true immer TestKostenstelle (S5900000)
         //             Kostentraeger      nil
-        //             Liefertermin
-        //               Data             Lieferdatum der Position, Format wie oben
         //             LIMSIdentifier     LIMSIdentifier
         //             Langtext           ArtikelName
+        //             Liefertermin
+        //               Data             Lieferdatum der Position, Format wie oben
         //             Menge              Menge
         //             OfficeLineHandle   nil
         //             OfficeLineItem
-        //               Artikelnummer    ArtikelNR achtstellig; bei Konfig.SageTest = true immer TestArtikelnummer (04005019)
+        //               Artikelnummer    immer TestArtikelnummer (04005019)
         //             Price              Endpreis
         //     Wkz                  USD = 0 -> "USD", sonst "EUR"
         // ------------------------------------------------------------------------------------------
@@ -447,8 +447,6 @@ namespace WipSageWeb.Data
 
         private const string KopftextEnglisch = "We thank you very much for your order and charge the services rendered as follows:";
         private const string KopftextDeutsch = "Wir danken Ihnen für den uns erteilten Auftrag und erlauben uns, folgende Services in Rechnung zu stellen:";
-        private const string ProbeEnglisch = "Your reference:";
-        private const string ProbeDeutsch = "Ihre Probe:";
 
         private static XDocument BuildDocument(int pa, List<WipPaketAna> positions, bool test)
         {
@@ -461,26 +459,27 @@ namespace WipSageWeb.Data
                 Element("DiscountPercent", "0"),
                 Element("Kopftext", englisch ? KopftextEnglisch : KopftextDeutsch),
                 Element("Kto", Kto(head)),
-                Liefertermin(head),
                 Element("LIMSIdentifier", matchcode),
+                Liefertermin(head),
                 Element("Matchcode", matchcode),
                 Element("OfficeLineHandle", null),
-                new XElement(Ns + "Samples", positions.Select(p => BuildSample(p, englisch, test))),
+                new XElement(Ns + "Samples", positions.Select((p, i) => BuildSample(p, englisch, test, i == 0))),
                 Element("Wkz", Waehrung(head)));
 
             return new XDocument(new XDeclaration("1.0", "utf-8", null), order);
         }
 
-        private static XElement BuildSample(WipPaketAna p, bool englisch, bool test)
+        // erstes = erstes Sample des PA: dort steht die Spalte PA als erste Zeile im Namen
+        private static XElement BuildSample(WipPaketAna p, bool englisch, bool test, bool erstes)
         {
             var lims = FormatValue(GetColumn(p, "LIMSIdentifier"));
-            var artikelNr = Artikelnummer(p);
+            var name = new[] { erstes ? FormatValue(GetColumn(p, "PA")) : null, SampleName(p, englisch), FormatValue(GetColumn(p, "PINummer")) }
+                .Where(s => !string.IsNullOrWhiteSpace(s));
             return new XElement(Ns + "Sample",
-                Element("LIMSIdentifier", lims),
-                Element("Name", SampleName(p, englisch)),
+                Element("Name", string.Join(Environment.NewLine, name)),
                 new XElement(Ns + "Packages",
                     new XElement(Ns + "Package",
-                        Element("Bezeichnung", artikelNr),
+                        Element("Bezeichnung", OhneFuehrendeNullen(GetColumn(p, "ArtikelNR"))),
                         Element("Bezeichnung2", null),
                         Element("Dimensionstext", FormatValue(GetColumn(p, "PBuDat"))),
                         Element("DiscountPercent", "0"),
@@ -488,13 +487,13 @@ namespace WipSageWeb.Data
                         Element("Erloeskonto", Erloeskonto(p)),
                         Element("Kostenstelle", test ? TestKostenstelle : FormatValue(GetColumn(p, "KST"))),
                         Element("Kostentraeger", null),
-                        Liefertermin(p),
                         Element("LIMSIdentifier", lims),
                         Element("Langtext", FormatValue(GetColumn(p, "ArtikelName"))),
+                        Liefertermin(p),
                         Element("Menge", FormatValue(GetColumn(p, "Menge"))),
                         Element("OfficeLineHandle", null),
                         new XElement(Ns + "OfficeLineItem",
-                            Element("Artikelnummer", test ? TestArtikelnummer : artikelNr)),
+                            Element("Artikelnummer", TestArtikelnummer)),
                         Element("Price", FormatValue(GetColumn(p, "Endpreis"))))));
         }
 
@@ -530,13 +529,30 @@ namespace WipSageWeb.Data
                 : new XElement(Ns + name, value);
         }
 
-        // "Your reference: <Charge1> <Charge2>" bzw. "Ihre Probe: ..."; ohne Charge bleibt das Element leer
+        // Charge1, Zeilenumbruch, Charge2; ohne Charge null
         private static string SampleName(WipPaketAna p, bool englisch)
         {
             var chargen = new[] { FormatValue(GetColumn(p, "Charge1")), FormatValue(GetColumn(p, "Charge2")) }
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .ToList();
-            return chargen.Count == 0 ? null : (englisch ? ProbeEnglisch : ProbeDeutsch) + " " + string.Join(" ", chargen);
+            return chargen.Count == 0 ? null : string.Join(Environment.NewLine, chargen);
+        }
+
+        // Bezeichnung: ArtikelNR ohne führende Nullen (003053 -> 3053); nur Nullen ergeben "0", Text bleibt unverändert
+        private static string OhneFuehrendeNullen(object wert)
+        {
+            var nummer = FormatValue(wert);
+            if (string.IsNullOrWhiteSpace(nummer))
+            {
+                return null;
+            }
+            nummer = nummer.Trim();
+            if (!nummer.All(char.IsDigit))
+            {
+                return nummer;
+            }
+            var ohneNullen = nummer.TrimStart('0');
+            return ohneNullen.Length == 0 ? "0" : ohneNullen;
         }
 
         // Erlöskonto fünfstellig mit führenden Nullen (4000 -> 04000); was keine Zahl ist, bleibt unverändert

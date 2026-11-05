@@ -74,7 +74,7 @@ namespace WipSageWeb.Data
         /// <summary>Liest SageHDR.Status und MessageVonSage für die PAs; nur Sätze mit Inhalt.</summary>
         Task<IReadOnlyDictionary<int, SageRueckmeldung>> GetSageHdrRueckmeldungAsync(IEnumerable<int> pas, CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Liest SagePos.Status und MessageVonSage eines PA, Schlüssel: PI (ohne "PI") und Ulfd.</summary>
+        /// <summary>Liest SagePos.Status und MessageVonSage eines PA, Schlüssel: PI (zehn Ziffern hinter "PI") und Ulfd.</summary>
         Task<IReadOnlyDictionary<(string PI, int Ulfd), SageRueckmeldung>> GetSagePosRueckmeldungAsync(int pa, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>

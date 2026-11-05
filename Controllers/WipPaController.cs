@@ -84,18 +84,14 @@ namespace WipSageWeb.Controllers
                     .GroupBy(p => p.BelegMatchCode.Value)
                     .ToList();
 
-                // Rückmeldung von Sage je Position aus SagePos (Zuordnung über PI ohne "PI" und Ulfd) - nur Anzeige
+                // Rückmeldung von Sage je Position aus SagePos (Zuordnung über PI = zehn Ziffern hinter "PI", und Ulfd) - nur Anzeige
                 try
                 {
                     var rueckmeldungen = await _repository.GetSagePosRueckmeldungAsync(pa, cancellationToken);
                     foreach (var pos in positionen.SelectMany(g => g))
                     {
-                        var pi = (pos.PINummer ?? "").Trim().ToUpperInvariant();
-                        if (pi.StartsWith("PI", StringComparison.Ordinal))
-                        {
-                            pi = pi.Substring(2);
-                        }
-                        if (pos.Ulfd.HasValue && rueckmeldungen.TryGetValue((pi, pos.Ulfd.Value), out var rueckmeldung))
+                        var pi = pos.PI;
+                        if (pi != null && pos.Ulfd.HasValue && rueckmeldungen.TryGetValue((pi, pos.Ulfd.Value), out var rueckmeldung))
                         {
                             pos.SageRueckmeldung = rueckmeldung;
                         }

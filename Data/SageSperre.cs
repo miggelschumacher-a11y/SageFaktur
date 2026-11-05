@@ -125,7 +125,7 @@ namespace WipSageWeb.Data
     /// <summary>Eine Zeile für dbo.SagePos: eine übergebene Position (Analyse oder Paket) eines PA.</summary>
     public sealed class SagePosZeile
     {
-        /// <summary>PI-Nummer ohne das Präfix "PI" (wie WorkInProgress.PI), nvarchar(10).</summary>
+        /// <summary>PI: die zehn Ziffern hinter "PI" in PINummer (siehe WipPaketAna.PI), nvarchar(10).</summary>
         public string PI { get; set; }
         public byte Ulfd { get; set; }
 
@@ -139,7 +139,7 @@ namespace WipSageWeb.Data
     /// <summary>OfficeLineHandle einer Position aus der Antwort von Sage, für dbo.SagePos (Zuordnung über PI und Ulfd).</summary>
     public sealed class SagePosHandle
     {
-        /// <summary>PI-Nummer ohne das Präfix "PI" (wie SagePos.PI).</summary>
+        /// <summary>PI: die zehn Ziffern hinter "PI" (wie SagePos.PI).</summary>
         public string PI { get; set; }
         public byte Ulfd { get; set; }
         public int OfficeLineHandle { get; set; }

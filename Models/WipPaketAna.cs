@@ -24,6 +24,20 @@ namespace WipSageWeb.Models
 
         public string PINummer { get; set; }
 
+        /// <summary>
+        /// Die PI aus <see cref="PINummer"/>: die zehn Ziffern hinter dem Text "PI" (PI1234567890 -> 1234567890).
+        /// So steht sie in SagePos.PI. Null, wenn PINummer kein "PI" mit zehn Ziffern dahinter enthält.
+        /// </summary>
+        public string PI
+        {
+            get
+            {
+                var treffer = System.Text.RegularExpressions.Regex.Match(PINummer ?? "", @"PI\s*(\d{10})(?!\d)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                return treffer.Success ? treffer.Groups[1].Value : null;
+            }
+        }
+
         /// <summary>Laufende Nummer der Analyse innerhalb der Probe (PI) - zusammen mit der PI eindeutig.</summary>
         public int? Ulfd { get; set; }
         public int? USD { get; set; }
