@@ -423,7 +423,7 @@ namespace WipSageWeb.Data
         //         Name             zeilenweise: PA (nur im ersten Sample des PA), Charge1, Charge2, PINummer
         //         Packages
         //           Package
-        //             Bezeichnung        ArtikelNR ohne führende Nullen (003053 -> 3053) - auch bei Konfig.SageTest = true
+        //             Bezeichnung        ArtikelNR unverändert aus der Prozedur - auch bei Konfig.SageTest = true
         //             Bezeichnung2       nil
         //             Dimensionstext     PBuDat
         //             DiscountPercent    0
@@ -479,7 +479,7 @@ namespace WipSageWeb.Data
                 Element("Name", string.Join(Environment.NewLine, name)),
                 new XElement(Ns + "Packages",
                     new XElement(Ns + "Package",
-                        Element("Bezeichnung", OhneFuehrendeNullen(GetColumn(p, "ArtikelNR"))),
+                        Element("Bezeichnung", FormatValue(GetColumn(p, "ArtikelNR"))),
                         Element("Bezeichnung2", null),
                         Element("Dimensionstext", FormatValue(GetColumn(p, "PBuDat"))),
                         Element("DiscountPercent", "0"),
@@ -536,23 +536,6 @@ namespace WipSageWeb.Data
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .ToList();
             return chargen.Count == 0 ? null : string.Join(Environment.NewLine, chargen);
-        }
-
-        // Bezeichnung: ArtikelNR ohne führende Nullen (003053 -> 3053); nur Nullen ergeben "0", Text bleibt unverändert
-        private static string OhneFuehrendeNullen(object wert)
-        {
-            var nummer = FormatValue(wert);
-            if (string.IsNullOrWhiteSpace(nummer))
-            {
-                return null;
-            }
-            nummer = nummer.Trim();
-            if (!nummer.All(char.IsDigit))
-            {
-                return nummer;
-            }
-            var ohneNullen = nummer.TrimStart('0');
-            return ohneNullen.Length == 0 ? "0" : ohneNullen;
         }
 
         // Erlöskonto fünfstellig mit führenden Nullen (4000 -> 04000); was keine Zahl ist, bleibt unverändert

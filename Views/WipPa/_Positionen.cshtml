@@ -1,7 +1,7 @@
 @model IEnumerable<IGrouping<int, WipPaketAna>>
 @* Akkordeon-Inhalte aller PAs: je PA ein Block, den wippa.js in die passende Zeile einsetzt *@
 @{
-    // Testbetrieb (Konfig.SageTest): in den Spalten Artikel-Nr. und KST stehen die Werte, die an Sage gehen
+    // Testbetrieb (Konfig.SageTest): in der Spalte KST steht der Wert, der an Sage geht
     var sageTest = ViewData["SageTest"] as bool? == true;
 }
 @foreach (var pa in Model)
@@ -44,14 +44,8 @@
                     <tr>
                         <td>@pos.PINummer</td>
                         <td class="num">@pos.Ulfd</td>
-                        @if (sageTest)
-                        {
-                            <td class="sage-test" title="Testbetrieb (SageTest) - an Sage geht @WipSageWeb.Data.SageExportService.TestArtikelnummer; echte Artikelnummer: @pos.ArtikelNR">@WipSageWeb.Data.SageExportService.TestArtikelnummer</td>
-                        }
-                        else
-                        {
-                            <td>@pos.ArtikelNR</td>
-                        }
+                        @* ArtikelNR aus der Prozedur - auch im Testbetrieb (die Test-Artikelnummer steht nur in der XML) *@
+                        <td>@pos.ArtikelNR</td>
                         <td class="text">@pos.ArtikelName</td>
                         <td class="text pre">@pos.PBuDat</td>
                         <td class="text">@pos.FixParaList</td>
