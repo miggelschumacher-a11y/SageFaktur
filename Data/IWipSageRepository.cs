@@ -78,6 +78,12 @@ namespace WipSageWeb.Data
         Task<IReadOnlyDictionary<(string PI, int Ulfd), SageRueckmeldung>> GetSagePosRueckmeldungAsync(int pa, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
+        /// Liest übertragene PAs aus dbo.WIPSageUebertragenePAs_V (History-Seite), neueste zuerst. Höchstens
+        /// <paramref name="max"/> + 1 Zeilen - die zusätzliche Zeile zeigt an, dass es mehr Treffer gibt.
+        /// </summary>
+        Task<IReadOnlyList<UebertragenerPa>> GetUebertragenePAsAsync(HistoryFilter filter, int max, CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
         /// Liest Konfig.SageTest (Testbetrieb) und die Adresse der Sage-Schnittstelle dazu: bei SageTest = true
         /// Konfig.SageTestExportURL, sonst Konfig.SageReleaseExportURL.
         /// </summary>

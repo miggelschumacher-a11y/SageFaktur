@@ -25,6 +25,17 @@
             {
                 <span class="app-user">@loginUser.Kurzname</span>
             }
+            @if (ViewData["ZurueckUrl"] is string zurueckUrl)
+            {
+                @* Unterseiten (z. B. History): zurück zur PA-Liste *@
+                <a class="app-back" href="@zurueckUrl" title="Zurück zur PA-Liste">
+                    <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+                        <path fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                              d="M10 6 4 12l6 6M4 12h16" />
+                    </svg>
+                    <span class="sr-only">Zurück zur PA-Liste</span>
+                </a>
+            }
             <a class="app-home" href="@homeUrl" title="Zur Hauptseite">
                 <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
                     <path fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"

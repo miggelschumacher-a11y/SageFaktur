@@ -139,6 +139,11 @@
         <span><strong>@Model.PaCount</strong> PAs</span>
         <span><strong id="selectedCount">@Model.SelectedCount</strong> ausgewählt</span>
         <span>Summe Endpreis: <strong>@Model.EndpreisTotal.ToString("N2")</strong></span>
+        @if (Model.AusZwischenspeicher && Model.DatenStand.HasValue)
+        {
+            @* Rückkehr aus der History: PAs vom früheren Stand, Status von Sage aktuell - "Neu laden" liest alles neu *@
+            <span title="Die PAs wurden nicht neu gelesen. Der Status aus Sage ist aktuell. „Neu laden“ liest alles neu.">Stand <strong>@Model.DatenStand.Value.ToString("HH:mm")</strong> Uhr</span>
+        }
         @if (Model.CanWork)
         {
             <a class="btn btn-secondary" asp-action="Index" data-progress="Daten werden geladen …">Neu laden</a>
@@ -238,7 +243,7 @@
                         : row.Zustand == PaZustand.Unbekannt ? "is-unknown" : null;
                     // Feld Problem gefüllt: PA-Zeile und ihre Positionen dezent rot hinterlegen, Haken gesperrt
                     var problemKlasse = row.HatProblem ? "has-problem" : null;
-                    <tr class="pa-row @(row.IsSelected ? "selected" : null) @zustandKlasse @problemKlasse" data-problem="@(row.HatProblem ? "mit" : "ohne")" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())" data-kundenr="@row.KundeNr" data-sperrflag="@row.Sperrflag" data-rechnungszeit="@row.Rechnungszeit" data-status="@statusWert">
+                    <tr class="pa-row @(row.IsSelected ? "selected" : null) @zustandKlasse @problemKlasse @row.FarbKlasse"data-problem="@(row.HatProblem ? "mit" : "ohne")" data-pa="@row.PA" data-kunde="@((row.KundeName ?? "").Trim())" data-kundenr="@row.KundeNr" data-sperrflag="@row.Sperrflag" data-rechnungszeit="@row.Rechnungszeit" data-status="@statusWert">
                         <td class="col-select">
                             @* Von anderen gesperrte PAs (auch ein dort gerade neu erstelltes) sind nur lesbar: Checkbox gesperrt.
                                Ein schon übergebener, freier PA bleibt anklickbar (data-uebergeben): beim Anhaken fragt wippa.js,
@@ -285,9 +290,11 @@
                             @if (row.SageRueckmeldung != null && row.SageRueckmeldung.HatRueckmeldungVonSage)
                             {
                                 @* Rückmeldung von Sage aus SageHDR: Status 2/3 und MessageVonSage ("neu"/"XML erzeugt" zeigt schon das Abzeichen) *@
+                                // Bei einem Fehler steht der Zeitpunkt der Übertragung (SageHDR.AnSageGesendetAm) dabei
                                 var fehler = row.SageRueckmeldung.Status == WipSageWeb.Data.SageStatus.FehlerInSage;
+                                var zeitpunkt = fehler && row.SageRueckmeldung.Zeitpunkt.HasValue ? " (" + row.SageRueckmeldung.Zeitpunkt.Value.ToString("dd.MM.yyyy HH:mm:ss") + ")" : "";
                                 <div class="sage-rueckmeldung @(fehler ? "sage-fehler" : null)" title="Status und Meldung von Sage (SageHDR)">
-                                    @(row.SageRueckmeldung.StatusText ?? "Sage")@(string.IsNullOrWhiteSpace(row.SageRueckmeldung.MessageVonSage) ? "" : ": " + row.SageRueckmeldung.MessageVonSage)
+                                    @(row.SageRueckmeldung.StatusText ?? "Sage")@zeitpunkt@(string.IsNullOrWhiteSpace(row.SageRueckmeldung.MessageVonSage) ? "" : ": " + row.SageRueckmeldung.MessageVonSage)
                                 </div>
                             }
                             @if (row.SageRueckmeldung?.OfficeLineHandle != null || row.SageRueckmeldung?.OfficeLineVorgangsHandle != null)
@@ -323,6 +330,8 @@
         <button type="submit" class="btn btn-primary" disabled="@(!Model.CanWork || !Model.Rows.Any(r => r.IstAuswaehlbar))">
             An Sage übergeben
         </button>
+        @* Suche in den schon an Sage übertragenen PAs (dbo.WIPSageUebertragenePAs_V) *@
+        @*<a class="btn btn-secondary" id="historyLink" asp-action="History">In History suchen</a>*@
     </div>
 </form>
 

@@ -89,6 +89,12 @@ namespace WipSageWeb.Data
         /// </summary>
         public string TestExportOrdner { get; set; }
 
+        /// <summary>Konfig.SagePrintKey: Druckschlüssel des Auftrags in Sage (Order/Druckschluessel); null, wenn nicht hinterlegt.</summary>
+        public short? PrintKey { get; set; }
+
+        /// <summary>Konfig.SageHistoryDays: die History zeigt beim Öffnen nur die Übertragungen der letzten so vielen Tage; null/0 = alle.</summary>
+        public int? HistoryDays { get; set; }
+
         /// <summary>
         /// Konfig.SageTest: Testbetrieb. Dann geht der Auftrag an Konfig.SageTestExportURL (sonst an
         /// Konfig.SageReleaseExportURL), und in den XML-Daten stehen als Artikelnummer immer

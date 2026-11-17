@@ -226,6 +226,38 @@ const WipConfirm = (function () {
         c.items.forEach(i => { i.checked = false; });
     });
 
+    // Wechsel zur History: die eingestellten Filter im Tab merken (sessionStorage) und bei der Rückkehr
+    // (?ausHistory=True, Zurück-Pfeil der History) wieder einsetzen. Werte, die es nicht mehr gibt, entfallen.
+    const filterSpeicher = 'wipsage.hauptfilter';
+    function filterMerken() {
+        const zustand = {
+            filters: filters.map(f => ({ id: f.box.id, haken: f.items.filter(i => i.checked).map(i => i.value) })),
+            columns: columns.map(c => ({ attr: c.attr, text: c.combo ? '' : c.input.value, haken: c.items.filter(i => i.checked).map(i => i.value) }))
+        };
+        try { sessionStorage.setItem(filterSpeicher, JSON.stringify(zustand)); } catch (e) { /* ohne Speicher: Filter beginnen wieder leer */ }
+    }
+    function filterWiederherstellen() {
+        let zustand = null;
+        try { zustand = JSON.parse(sessionStorage.getItem(filterSpeicher) || 'null'); } catch (e) { zustand = null; }
+        if (!zustand) return;
+        (zustand.filters || []).forEach(z => {
+            const f = filters.find(x => x.box.id === z.id);
+            if (!f) return;
+            const haken = new Set(z.haken || []);
+            f.items.forEach(i => { i.checked = haken.has(i.value); });
+        });
+        (zustand.columns || []).forEach(z => {
+            const c = columns.find(x => x.attr === z.attr);
+            if (!c) return;
+            if (!c.combo) c.input.value = z.text || '';
+            const haken = new Set(z.haken || []);
+            c.items.forEach(i => { i.checked = haken.has(i.value); });
+        });
+    }
+    const historyLink = document.getElementById('historyLink');
+    if (historyLink) historyLink.addEventListener('click', filterMerken);
+    if (/[?&]ausHistory=true/i.test(location.search)) filterWiederherstellen();
+
     // Nur Ziffern zulassen (PAs, Kunden-Nr.) - auch beim Einfügen aus der Zwischenablage
     function nurZiffern(input) {
         if (input.dataset.ziffern && /\D/.test(input.value)) input.value = input.value.replace(/\D/g, '');
@@ -677,8 +709,14 @@ const WipMessage = (function () {
         if (submit && !nochFrei) submit.disabled = true;
     }
 
-    // Von Sage abgelehnt oder übersprungen: der PA bleibt übergebbar, wird aber abgehakt und zeigt die Meldung
-    function markRejected(pa, text) {
+    // Von Sage abgelehnt oder übersprungen: der PA bleibt übergebbar, wird aber abgehakt und zeigt die Meldung -
+    // mit Zeitstempel, z. B. "Fehler in Sage (13.11.2026 09:48:21): <Meldung>"
+    function markRejected(pa, titel, meldung) {
+        const now = new Date();
+        const two = n => (n < 10 ? '0' : '') + n;
+        const zeit = two(now.getDate()) + '.' + two(now.getMonth() + 1) + '.' + now.getFullYear() + ' ' +
+            two(now.getHours()) + ':' + two(now.getMinutes()) + ':' + two(now.getSeconds());
+        const text = titel + ' (' + zeit + ')' + (meldung ? ': ' + meldung : '');
         rowsOf(pa).forEach(row => {
             row.querySelector('input.row-select').checked = false;
             row.classList.remove('selected');
@@ -728,9 +766,9 @@ const WipMessage = (function () {
                 if (status !== undefined) rowsOf(pa).forEach(row => { row.dataset.status = status; });
                 if (step.ergebnis === 'Uebergeben') markExported(pa, step.officeLineHandle, step.officeLineVorgangsHandle, 'Alles ok in Sage' + (step.meldung ? ': ' + step.meldung : ''), false);
                 else if (step.ergebnis === 'KeineAntwort') markExported(pa, null, null, 'XML erzeugt: ' + step.meldung, true);
-                else if (step.ergebnis === 'Abgelehnt') markRejected(pa, 'Fehler in Sage: ' + step.meldung);
-                else if (step.ergebnis === 'NichtUebergeben') markRejected(pa, 'Nicht übergeben: ' + step.meldung);
-                else if (step.ergebnis === 'Gesperrt') markRejected(pa, 'Nicht gesperrt: ' + step.meldung);
+                else if (step.ergebnis === 'Abgelehnt') markRejected(pa, 'Fehler in Sage', step.meldung);
+                else if (step.ergebnis === 'NichtUebergeben') markRejected(pa, 'Nicht übergeben', step.meldung);
+                else if (step.ergebnis === 'Gesperrt') markRejected(pa, 'Nicht gesperrt', step.meldung);
                 laufenderPa = null;
             }
             if (rueckfrage) WipConfirm.close();   // Export ist fertig - eine noch offene Rückfrage erübrigt sich

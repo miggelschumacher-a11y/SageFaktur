@@ -79,6 +79,10 @@ namespace WipSageWeb.Data
                     int oProblem = reader.GetOrdinal("Problem");
                     int oEndpreisSum = reader.GetOrdinal("EndpreisSum");
                     int oRueckmeldung = reader.GetOrdinal("RueckmeldungSchnittstelle");
+                    int oHasBio = reader.GetOrdinal("hasBio");
+                    int oHasMiBi = reader.GetOrdinal("hasMiBi");
+                    int oHasGVO = reader.GetOrdinal("hasGVO");
+                    int oHasStorno = reader.GetOrdinal("hasStorno");
 
                     while (await reader.ReadAsync(cancellationToken))
                     {
@@ -94,7 +98,11 @@ namespace WipSageWeb.Data
                             Rechnungszeit = GetShort(reader, oRechnungszeit),
                             Problem = GetString(reader, oProblem),
                             EndpreisSum = GetDecimal(reader, oEndpreisSum),
-                            RueckmeldungSchnittstelle = GetString(reader, oRueckmeldung)
+                            RueckmeldungSchnittstelle = GetString(reader, oRueckmeldung),
+                            HasBio = GetInt(reader, oHasBio),
+                            HasMiBi = GetInt(reader, oHasMiBi),
+                            HasGVO = GetInt(reader, oHasGVO),
+                            HasStorno = GetInt(reader, oHasStorno)
                         });
                     }
                 }
@@ -119,6 +127,8 @@ namespace WipSageWeb.Data
                     int oPA = reader.GetOrdinal("PA");
                     int oPADatum = reader.GetOrdinal("PA_Datum");
                     int oLieferdatum = reader.GetOrdinal("Lieferdatum");
+                    int oLeistungVon = reader.GetOrdinal("LeistungsZeitraum_von");
+                    int oLeistungBis = reader.GetOrdinal("Leistungszeitraum_bis");
                     int oKunde = reader.GetOrdinal("Kunde_Auftraggeber");
                     int oKundeName = reader.GetOrdinal("KundeName_Auftraggeber");
                     int oPINummer = reader.GetOrdinal("PINummer");
@@ -133,6 +143,8 @@ namespace WipSageWeb.Data
                     int oFixParaList = reader.GetOrdinal("FixParaList");
                     int oMenge = reader.GetOrdinal("Menge");
                     int oEndpreis = reader.GetOrdinal("Endpreis");
+                    int oVK = reader.GetOrdinal("VK");
+                    int oRabatt = reader.GetOrdinal("Rabatt");
                     int oKonto = reader.GetOrdinal("Konto");
                     int oKST = reader.GetOrdinal("KST");
                     int oLIMSIdentifier = reader.GetOrdinal("LIMSIdentifier");
@@ -145,6 +157,8 @@ namespace WipSageWeb.Data
                             PA = GetString(reader, oPA),
                             PA_Datum = GetDateTime(reader, oPADatum),
                             Lieferdatum = GetDateTime(reader, oLieferdatum),
+                            LeistungsZeitraumVon = GetDateTime(reader, oLeistungVon),
+                            LeistungsZeitraumBis = GetDateTime(reader, oLeistungBis),
                             Kunde_Auftraggeber = GetString(reader, oKunde),
                             KundeName_Auftraggeber = GetString(reader, oKundeName),
                             PINummer = GetString(reader, oPINummer),
@@ -159,6 +173,8 @@ namespace WipSageWeb.Data
                             FixParaList = GetString(reader, oFixParaList),
                             Menge = GetInt(reader, oMenge),
                             Endpreis = GetDecimal(reader, oEndpreis),
+                            VK = GetDecimal(reader, oVK),
+                            Rabatt = GetDecimal(reader, oRabatt),
                             Konto = GetString(reader, oKonto),
                             KST = GetString(reader, oKST),
                             LIMSIdentifier = GetString(reader, oLIMSIdentifier)
@@ -182,8 +198,9 @@ namespace WipSageWeb.Data
         {
             using (var connection = new SqlConnection(_connectionString))
             // SageTest entscheidet, welche Adresse gilt: true -> SageTestExportURL, false -> SageReleaseExportURL.
-            // SageTestExportOrdner: im Testbetrieb zusätzlich eine Kopie der XML-Daten dorthin
-            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner from dbo.Konfig order by ID;", connection))
+            // SageTestExportOrdner: im Testbetrieb zusätzlich eine Kopie der XML-Daten dorthin.
+            // SagePrintKey: Druckschlüssel in der XML (Order/Druckschluessel). SageHistoryDays: Zeitraum der History beim Öffnen
+            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner, SagePrintKey, SageHistoryDays from dbo.Konfig order by ID;", connection))
             {
                 await connection.OpenAsync(cancellationToken);
                 using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -198,7 +215,9 @@ namespace WipSageWeb.Data
                         Test = test,
                         ExportUrl = GetString(reader, test ? 1 : 2),
                         ExportUrlFeld = test ? "SageTestExportURL" : "SageReleaseExportURL",
-                        TestExportOrdner = GetString(reader, 3)
+                        TestExportOrdner = GetString(reader, 3),
+                        PrintKey = GetShort(reader, 4),
+                        HistoryDays = GetInt(reader, 5)
                     };
                 }
             }
@@ -608,7 +627,7 @@ SELECT @Anzahl;";
             }
 
             const string sql = @"
-                                SELECT h.PA, h.Status, h.MessageVonSage, h.OfficeLineHandle, h.OfficeLineVorgangsHandle
+                                SELECT h.PA, h.Status, h.MessageVonSage, h.OfficeLineHandle, h.OfficeLineVorgangsHandle, h.AnSageGesendetAm
                                 FROM dbo.SageHDR h
                                 INNER JOIN (SELECT DISTINCT x.v.value('.', 'int') AS PA FROM @PAs.nodes('/p') AS x(v)) p ON p.PA = h.PA
                                 WHERE h.Status IS NOT NULL OR h.MessageVonSage IS NOT NULL OR h.OfficeLineHandle IS NOT NULL OR h.OfficeLineVorgangsHandle IS NOT NULL;";
@@ -629,7 +648,8 @@ SELECT @Anzahl;";
                             Status = GetStatus(reader, 1),
                             MessageVonSage = GetString(reader, 2),
                             OfficeLineHandle = GetInt(reader, 3),
-                            OfficeLineVorgangsHandle = GetInt(reader, 4)
+                            OfficeLineVorgangsHandle = GetInt(reader, 4),
+                            Zeitpunkt = GetDateTime(reader, 5)
                         };
                     }
                 }
@@ -668,6 +688,64 @@ SELECT @Anzahl;";
                 }
             }
             return result;
+        }
+
+        public async Task<IReadOnlyList<UebertragenerPa>> GetUebertragenePAsAsync(HistoryFilter filter, int max, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            // Leere Filter (NULL) schränken nicht ein. Belegdatum: der ganze Tag. RECOMPILE: der Plan passt zu den
+            // tatsächlich gesetzten Filtern statt zum ersten Aufruf.
+            const string sql = @"
+                                SELECT TOP (@Max)
+                                       v.PA, v.Nummer, v.KKuerzel, v.AnSageGesendetVon, v.AnSageGesendetAm, v.ImportStatus
+                                     , v.OfficeLineVorgangsHandle, v.Belegjahr, v.BelegDatum, v.BelegNummer, v.Mandant, v.BelegArt
+                                     , v.OfficeLineHandle
+                                FROM dbo.WIPSageUebertragenePAs_V v
+                                WHERE (@PA IS NULL OR v.PA = @PA)
+                                  AND (@Kunde IS NULL OR v.Nummer = @Kunde)
+                                  AND (@Vorgang IS NULL OR v.OfficeLineVorgangsHandle = @Vorgang)
+                                  AND (@BelegNummer IS NULL OR v.BelegNummer = @BelegNummer)
+                                  AND (@BelegDatum IS NULL OR (v.BelegDatum >= @BelegDatum AND v.BelegDatum < DATEADD(DAY, 1, @BelegDatum)))
+                                  AND (@Seit IS NULL OR v.AnSageGesendetAm >= @Seit)
+                                ORDER BY v.AnSageGesendetAm DESC, v.PA DESC
+                                OPTION (RECOMPILE);";
+
+            var rows = new List<UebertragenerPa>();
+            using (var connection = new SqlConnection(_connectionString))
+            using (var command = new SqlCommand(sql, connection))
+            {
+                command.Parameters.Add("@Max", SqlDbType.Int).Value = max + 1;
+                command.Parameters.Add("@PA", SqlDbType.BigInt).Value = (object)filter.PA ?? DBNull.Value;
+                command.Parameters.Add("@Kunde", SqlDbType.BigInt).Value = (object)filter.Kunde ?? DBNull.Value;
+                command.Parameters.Add("@Vorgang", SqlDbType.BigInt).Value = (object)filter.Vorgang ?? DBNull.Value;
+                command.Parameters.Add("@BelegNummer", SqlDbType.BigInt).Value = (object)filter.BelegNummer ?? DBNull.Value;
+                command.Parameters.Add("@BelegDatum", SqlDbType.Date).Value = (object)filter.BelegDatum?.Date ?? DBNull.Value;
+                command.Parameters.Add("@Seit", SqlDbType.DateTime).Value = (object)filter.Seit ?? DBNull.Value;
+
+                await connection.OpenAsync(cancellationToken);
+                using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+                {
+                    while (await reader.ReadAsync(cancellationToken))
+                    {
+                        rows.Add(new UebertragenerPa
+                        {
+                            PA = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture),
+                            Nummer = reader.IsDBNull(1) ? (long?)null : Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture),
+                            KKuerzel = GetString(reader, 2),
+                            AnSageGesendetVon = GetString(reader, 3),
+                            AnSageGesendetAm = GetDateTime(reader, 4),
+                            ImportStatus = GetString(reader, 5),
+                            OfficeLineVorgangsHandle = GetInt(reader, 6),
+                            Belegjahr = GetInt(reader, 7),
+                            BelegDatum = GetDateTime(reader, 8),
+                            BelegNummer = GetInt(reader, 9),
+                            Mandant = GetInt(reader, 10),
+                            BelegArt = GetString(reader, 11),
+                            OfficeLineHandle = GetInt(reader, 12)
+                        });
+                    }
+                }
+            }
+            return rows;
         }
 
         private async Task<int> ExecuteAsync(string sql, SperrInhaber inhaber, Action<SqlCommand> parameters, CancellationToken cancellationToken)

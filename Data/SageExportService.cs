@@ -85,6 +85,9 @@ namespace WipSageWeb.Data
         /// <summary>Konfig.SageTestExportOrdner - nur bei <see cref="Test"/> gesetzt: dorthin zusätzlich eine Kopie der XML-Daten.</summary>
         public string TestExportOrdner { get; set; }
 
+        /// <summary>Konfig.SagePrintKey - Druckschlüssel in der XML (Order/Druckschluessel).</summary>
+        public short? Druckschluessel { get; set; }
+
         /// <summary>Benutzer, der den Export gestartet hat - nur er darf seine PAs übergeben.</summary>
         public SperrInhaber Inhaber { get; set; }
     }
@@ -157,6 +160,7 @@ namespace WipSageWeb.Data
                 Url = url,
                 Test = konfig.Test,
                 TestExportOrdner = konfig.Test && !string.IsNullOrWhiteSpace(konfig.TestExportOrdner) ? konfig.TestExportOrdner.Trim() : null,
+                Druckschluessel = konfig.PrintKey,
                 Inhaber = inhaber
             };
             job.PAs.AddRange(selectedPAs.Distinct().OrderBy(p => p));
@@ -233,7 +237,7 @@ namespace WipSageWeb.Data
                 zeilen = SagePosZeilen(pa, paPositions);
                 await _repository.SagePosErsetzenAsync(pa, zeilen, cancellationToken);
 
-                var dokument = BuildDocument(pa, paPositions, job.Test);
+                var dokument = BuildDocument(pa, paPositions, job.Test, job.Druckschluessel);
                 TestKopieSpeichern(job, pa, dokument);
                 antwort = await _sage.PostXmlTransactionAsync(job.Url, dokument, cancellationToken);
             }
@@ -411,7 +415,8 @@ namespace WipSageWeb.Data
         //
         //   Order
         //     DiscountPercent      0
-        //     Kopftext             fester Text: USD = 0 -> englisch, sonst deutsch
+        //     Druckschluessel      Konfig.SagePrintKey (leer -> nil)
+        //     Kopftext            fester Text: USD = 0 -> englisch, sonst deutsch
         //     Kto                  Kunde_Auftraggeber, fünfstellig mit führenden Nullen (nur reine Zahlen)
         //     LIMSIdentifier       BelegMatchCode (PA-Nummer)
         //     Liefertermin
@@ -420,13 +425,14 @@ namespace WipSageWeb.Data
         //     OfficeLineHandle     nil
         //     Samples
         //       Sample             je Position (Zeile der Prozedur) ein Sample (ohne LIMSIdentifier - der steht im Package)
-        //         Name             zeilenweise: PA (nur im ersten Sample des PA), Charge1, Charge2, PINummer
+        //         Name             zeilenweise: PA (nur solange noch nicht verwendet), Charge1, Charge2, PINummer;
+        //                          im ersten Sample immer, danach nil, solange der Text gleich dem des vorherigen Samples ist
         //         Packages
         //           Package
         //             Bezeichnung        ArtikelNR unverändert aus der Prozedur - auch bei Konfig.SageTest = true
         //             Bezeichnung2       nil
         //             Dimensionstext     PBuDat
-        //             DiscountPercent    0
+        //             DiscountPercent    Rabatt
         //             EBITCode           nil
         //             Erloeskonto        Konto, fünfstellig mit führenden Nullen
         //             Kostenstelle       KST; bei Konfig.SageTest = true immer TestKostenstelle (S5900000)
@@ -439,16 +445,16 @@ namespace WipSageWeb.Data
         //             OfficeLineHandle   nil
         //             OfficeLineItem
         //               Artikelnummer    immer TestArtikelnummer (04005019)
-        //             Price              Endpreis
+        //             Price              VK (nicht mehr Endpreis)
         //     Wkz                  USD = 0 -> "USD", sonst "EUR"
         // ------------------------------------------------------------------------------------------
         private static readonly XNamespace Ns = "http://schemas.datacontract.org/2004/07/appulsive.Intertek.LIMSService";
         private static readonly XNamespace Xsi = "http://www.w3.org/2001/XMLSchema-instance";
 
         private const string KopftextEnglisch = "We thank you very much for your order and charge the services rendered as follows:";
-        private const string KopftextDeutsch = "Wir danken Ihnen für den uns erteilten Auftrag und erlauben uns, folgende Services in Rechnung zu stellen:";
+        private const string KopftextDeutsch ="Wir danken Ihnen für den uns erteilten Auftrag und erlauben uns, folgende Services in Rechnung zu stellen:";
 
-        private static XDocument BuildDocument(int pa, List<WipPaketAna> positions, bool test)
+        private static XDocument BuildDocument(int pa, List<WipPaketAna> positions, bool test, short? druckschluessel)
         {
             var head = positions[0];
             var englisch = IstUsdNull(head);
@@ -457,32 +463,70 @@ namespace WipSageWeb.Data
             var order = new XElement(Ns + "Order",
                 new XAttribute(XNamespace.Xmlns + "i", Xsi),
                 Element("DiscountPercent", "0"),
+                Element("Druckschluessel", druckschluessel?.ToString(CultureInfo.InvariantCulture)),
                 Element("Kopftext", englisch ? KopftextEnglisch : KopftextDeutsch),
                 Element("Kto", Kto(head)),
                 Element("LIMSIdentifier", matchcode),
                 Liefertermin(head),
                 Element("Matchcode", matchcode),
                 Element("OfficeLineHandle", null),
-                new XElement(Ns + "Samples", positions.Select((p, i) => BuildSample(p, englisch, test, i == 0))),
+                new XElement(Ns + "Samples", BuildSamples(positions, englisch, test)),
                 Element("Wkz", Waehrung(head)));
 
             return new XDocument(new XDeclaration("1.0", "utf-8", null), order);
         }
 
-        // erstes = erstes Sample des PA: dort steht die Spalte PA als erste Zeile im Namen
-        private static XElement BuildSample(WipPaketAna p, bool englisch, bool test, bool erstes)
+        // <Name> je Sample:
+        //  - im ersten Sample immer gefüllt
+        //  - danach nur, wenn sich der Text (Charge1, Charge2, PINummer) gegenüber dem vorherigen Sample geändert hat
+        //    oder ein noch nicht verwendeter PA-Text dazukommt; sonst <Name i:nil="true"/>
+        //  - die Spalte PA steht als erste Zeile nur, solange dieser PA-Text noch in keinem <Name> verwendet wurde
+        private static IEnumerable<XElement> BuildSamples(List<WipPaketAna> positions, bool englisch, bool test)
+        {
+            var verwendetePAs = new HashSet<string>(StringComparer.Ordinal);
+            string vorherigerText = null;
+            for (var i = 0; i < positions.Count; i++)
+            {
+                var p = positions[i];
+                var paText = FormatValue(GetColumn(p, "PA"));
+                var paNeu = !string.IsNullOrWhiteSpace(paText) && !verwendetePAs.Contains(paText);
+                var text = SampleText(p, englisch);
+
+                string name = null;
+                if (i == 0 || text != vorherigerText || paNeu)
+                {
+                    name = string.Join(Environment.NewLine,
+                        new[] { paNeu ? paText : null, text }.Where(s => !string.IsNullOrWhiteSpace(s)));
+                    if (paNeu)
+                    {
+                        verwendetePAs.Add(paText);
+                    }
+                }
+                vorherigerText = text;
+                yield return BuildSample(p, test, name);
+            }
+        }
+
+        // Text für <Name> ohne PA: zeilenweise Charge1, Charge2, PINummer
+        private static string SampleText(WipPaketAna p, bool englisch)
+        {
+            return string.Join(Environment.NewLine,
+                new[] { SampleName(p, englisch), FormatValue(GetColumn(p, "PINummer")) }
+                    .Where(s => !string.IsNullOrWhiteSpace(s)));
+        }
+
+        // name = null -> <Name i:nil="true"/>
+        private static XElement BuildSample(WipPaketAna p, bool test, string name)
         {
             var lims = FormatValue(GetColumn(p, "LIMSIdentifier"));
-            var name = new[] { erstes ? FormatValue(GetColumn(p, "PA")) : null, SampleName(p, englisch), FormatValue(GetColumn(p, "PINummer")) }
-                .Where(s => !string.IsNullOrWhiteSpace(s));
             return new XElement(Ns + "Sample",
-                Element("Name", string.Join(Environment.NewLine, name)),
+                Element("Name", name),
                 new XElement(Ns + "Packages",
                     new XElement(Ns + "Package",
                         Element("Bezeichnung", FormatValue(GetColumn(p, "ArtikelNR"))),
                         Element("Bezeichnung2", null),
                         Element("Dimensionstext", FormatValue(GetColumn(p, "PBuDat"))),
-                        Element("DiscountPercent", "0"),
+                        Element("DiscountPercent", FormatValue(GetColumn(p, "Rabatt"))),
                         Element("EBITCode", null),
                         Element("Erloeskonto", Erloeskonto(p)),
                         Element("Kostenstelle", test ? TestKostenstelle : FormatValue(GetColumn(p, "KST"))),
@@ -494,7 +538,7 @@ namespace WipSageWeb.Data
                         Element("OfficeLineHandle", null),
                         new XElement(Ns + "OfficeLineItem",
                             Element("Artikelnummer", TestArtikelnummer)),
-                        Element("Price", FormatValue(GetColumn(p, "Endpreis"))))));
+                        Element("Price", FormatValue(GetColumn(p, "VK"))))));
         }
 
         // <Liefertermin><Data>2026-02-24 12:00:00 +01</Data></Liefertermin> aus der Spalte Lieferdatum: Datum ohne Uhrzeit

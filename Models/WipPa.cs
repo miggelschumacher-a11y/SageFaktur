@@ -46,6 +46,38 @@ namespace WipSageWeb.Models
         [Display(Name = "Rückmeldung Schnittstelle")]
         public string RueckmeldungSchnittstelle { get; set; }
 
+        // ---- Kennzahlen aus WIPSage_ProcR_getWIP_PAs: Anzahl der Analysen dieser Art im PA (0 = keine) ----
+
+        /// <summary>Analysen aus dem Laborbereich Bio-Analytik.</summary>
+        public int? HasBio { get; set; }
+
+        /// <summary>Bio-Mikrobiologie (häufig manuelle Rabatte).</summary>
+        public int? HasMiBi { get; set; }
+
+        /// <summary>GVO-Analysen (häufig manuelle Rabatte).</summary>
+        public int? HasGVO { get; set; }
+
+        /// <summary>Storno-Positionen.</summary>
+        public int? HasStorno { get; set; }
+
+        /// <summary>
+        /// Zeilenfarbe wie in der Excel-Vorlage (VS-Code-Farb-Logik): Problem geht vor (eigene Farbe has-problem),
+        /// sonst MiBi und GVO -> beide, nur MiBi bzw. nur GVO. Bio und Storno färben die Zeile nicht.
+        /// </summary>
+        public string FarbKlasse
+        {
+            get
+            {
+                if (HatProblem)
+                {
+                    return null;
+                }
+                var mibi = (HasMiBi ?? 0) > 0;
+                var gvo = (HasGVO ?? 0) > 0;
+                return mibi && gvo ? "has-mibi-gvo" : mibi ? "has-mibi" : gvo ? "has-gvo" : null;
+            }
+        }
+
         // ---- Zustand in dbo.SageHDR (Sperrvermerk / bereits übergeben) ----
 
         [Display(Name = "Status")]
@@ -88,6 +120,9 @@ namespace WipSageWeb.Models
 
         /// <summary>Vorausgewählt bzw. auswählbar: bearbeitbar und ohne Problem.</summary>
         public bool IstAuswaehlbar => Zustand == PaZustand.Bearbeitbar && !HatProblem;
+
+        /// <summary>Flache Kopie - für den Zwischenspeicher der Prozedur-Daten (siehe WipPaController.LoadAsync).</summary>
+        public WipPa Kopie() => (WipPa)MemberwiseClone();
     }
 
     public enum PaZustand

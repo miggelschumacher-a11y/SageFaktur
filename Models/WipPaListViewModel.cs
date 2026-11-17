@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -15,6 +16,12 @@ namespace WipSageWeb.Models
 
         /// <summary>Fehler beim Laden der Daten (z. B. keine DB-Verbindung).</summary>
         public string ErrorMessage { get; set; }
+
+        /// <summary>Wann die PAs aus WIPSage_ProcR_getWIP_PAs gelesen wurden; bei der Rückkehr aus der History ein früherer Stand.</summary>
+        public DateTime? DatenStand { get; set; }
+
+        /// <summary>true: die PAs kommen aus dem Zwischenspeicher (Rückkehr aus der History), nicht frisch aus der Prozedur.</summary>
+        public bool AusZwischenspeicher { get; set; }
 
         /// <summary>Meldung, die als Popup über der Seite erscheint (z. B. Ergebnis des Exports, keine gültige Sage-Adresse).</summary>
         public string PopupMessage { get; set; }

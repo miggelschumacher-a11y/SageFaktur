@@ -1,0 +1,110 @@
+@model HistoryViewModel
+@{
+    ViewData["Title"] = "History - an Sage übertragene PAs";
+    var f = Model.Filter;
+}
+
+<div class="toolbar">
+    <div class="toolbar-title">
+        <h1>An Sage übertragene PAs</h1>
+    </div>
+    <div class="toolbar-info">
+        <span><strong>@Model.Rows.Count</strong>@(Model.MehrTreffer ? "+" : "") Treffer</span>
+    </div>
+</div>
+
+@* Suchfelder: leere Felder filtern nicht. Zahlenfelder nur Ziffern (höchstens 10), Belegdatum nur als Datum. *@
+<form class="history-filter" asp-action="History" method="get" autocomplete="off">
+    <div class="history-feld">
+        <label for="hPa">PA</label>
+        <input type="text" id="hPa" name="pa" class="num" value="@f.PA" maxlength="10" inputmode="numeric" pattern="\d{1,10}" data-ziffern="1" />
+    </div>
+    <div class="history-feld">
+        <label for="hKunde">Kunden-Nr.</label>
+        <input type="text" id="hKunde" name="kunde" class="num" value="@f.Kunde" maxlength="10" inputmode="numeric" pattern="\d{1,10}" data-ziffern="1" />
+    </div>
+    <div class="history-feld">
+        <label for="hVorgang">Vorgangsnummer</label>
+        <input type="text" id="hVorgang" name="vorgang" class="num" value="@f.Vorgang" maxlength="10" inputmode="numeric" pattern="\d{1,10}" data-ziffern="1" />
+    </div>
+    <div class="history-feld">
+        <label for="hBelegNr">Belegnummer</label>
+        <input type="text" id="hBelegNr" name="belegnr" class="num" value="@f.BelegNummer" maxlength="10" inputmode="numeric" pattern="\d{1,10}" data-ziffern="1" />
+    </div>
+    <div class="history-feld">
+        <label for="hBelegDatum">Belegdatum</label>
+        <input type="date" id="hBelegDatum" name="belegdatum" value="@(f.BelegDatum?.ToString("yyyy-MM-dd"))" />
+    </div>
+    <button type="submit" class="btn btn-primary">Suchen</button>
+    <a class="btn btn-secondary" asp-action="History" asp-route-reset="1">Zurücksetzen</a>
+</form>
+
+@if (Model.ErrorMessage != null)
+{
+    <div class="alert alert-error">@Model.ErrorMessage</div>
+}
+@if (Model.LetzteTage.HasValue)
+{
+    <div class="alert alert-info">Angezeigt werden die Übertragungen der letzten @Model.LetzteTage Tage (Konfig.SageHistoryDays). Für ältere PAs ein Suchfeld füllen.</div>
+}
+@if (Model.MehrTreffer)
+{
+    <div class="alert alert-info">Es gibt mehr als @Model.MaxZeilen Treffer - angezeigt werden die @Model.MaxZeilen neuesten. Bitte die Suche eingrenzen.</div>
+}
+
+<div class="table-wrap">
+    <table class="grid history-grid">
+        <thead>
+            <tr>
+                <th class="num">PA</th>
+                <th class="num">Kunden-Nr.</th>
+                <th>Kunde</th>
+                <th>Gesendet am</th>
+                <th>Gesendet von</th>
+                <th>Import-Status</th>
+                <th class="num">Vorgangsnummer</th>
+                <th>Belegart</th>
+                <th class="num">Belegnummer</th>
+                <th>Belegdatum</th>
+                <th class="num">Belegjahr</th>
+                <th class="num">Mandant</th>
+                <th class="num">OfficeLineHandle</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Model.Rows.Count == 0)
+            {
+                <tr><td class="empty" colspan="13">@(Model.ErrorMessage != null ? "Keine Daten." : f.IstLeer ? (Model.LetzteTage.HasValue ? "In den letzten " + Model.LetzteTage + " Tagen wurden keine PAs an Sage übertragen." : "Es wurden noch keine PAs an Sage übertragen.") : "Keine übertragenen PAs zu dieser Suche.")</td></tr>
+            }
+            @foreach (var r in Model.Rows)
+            {
+                <tr>
+                    <td class="num">@r.PA</td>
+                    <td class="num">@r.Nummer</td>
+                    <td>@r.KKuerzel</td>
+                    <td>@(r.AnSageGesendetAm?.ToString("dd.MM.yyyy HH:mm"))</td>
+                    <td>@r.AnSageGesendetVon</td>
+                    <td class="text">@r.ImportStatus</td>
+                    <td class="num">@r.OfficeLineVorgangsHandle</td>
+                    <td>@r.BelegArt</td>
+                    <td class="num">@r.BelegNummer</td>
+                    <td>@(r.BelegDatum?.ToString("dd.MM.yyyy"))</td>
+                    <td class="num">@r.Belegjahr</td>
+                    <td class="num">@r.Mandant</td>
+                    <td class="num">@r.OfficeLineHandle</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@section Scripts {
+    <script>
+        // Zahlenfelder: nur Ziffern zulassen - auch beim Einfügen aus der Zwischenablage
+        document.querySelectorAll('.history-filter input[data-ziffern]').forEach(function (input) {
+            input.addEventListener('input', function () {
+                if (/\D/.test(input.value)) input.value = input.value.replace(/\D/g, '').slice(0, 10);
+            });
+        });
+    </script>
+}

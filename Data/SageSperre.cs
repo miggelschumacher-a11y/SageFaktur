@@ -166,6 +166,12 @@ namespace WipSageWeb.Data
         /// </summary>
         public int? OfficeLineVorgangsHandle { get; set; }
 
+        /// <summary>
+        /// Zeitpunkt der letzten Übertragung (nur SageHDR: AnSageGesendetAm). Sage antwortet direkt auf die
+        /// Übertragung, deshalb ist das auch der Zeitpunkt einer Fehlermeldung - er steht in der Statuszeile dabei.
+        /// </summary>
+        public DateTime? Zeitpunkt { get; set; }
+
         /// <summary>Text zum Status wie in SageHDR.StatusText ("neu", "XML erzeugt", ...).</summary>
         public string StatusText => Status?.Text();
 

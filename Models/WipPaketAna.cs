@@ -18,6 +18,10 @@ namespace WipSageWeb.Models
         public DateTime? PA_Datum { get; set; }
         public DateTime? Lieferdatum { get; set; }
 
+        /// <summary>Leistungszeitraum: von = PA-Datum, bis = Lieferdatum (Spalten LeistungsZeitraum_von / Leistungszeitraum_bis).</summary>
+        public DateTime? LeistungsZeitraumVon { get; set; }
+        public DateTime? LeistungsZeitraumBis { get; set; }
+
         /// <summary>Debitorenkonto, z. B. "D29375".</summary>
         public string Kunde_Auftraggeber { get; set; }
         public string KundeName_Auftraggeber { get; set; }
@@ -52,6 +56,12 @@ namespace WipSageWeb.Models
 
         public int? Menge { get; set; }
         public decimal? Endpreis { get; set; }
+
+        /// <summary>Verkaufspreis - geht als Package/Price an Sage.</summary>
+        public decimal? VK { get; set; }
+
+        /// <summary>Rabatt - geht als Package/DiscountPercent an Sage.</summary>
+        public decimal? Rabatt { get; set; }
         public string Konto { get; set; }
         public string KST { get; set; }
         public string LIMSIdentifier { get; set; }

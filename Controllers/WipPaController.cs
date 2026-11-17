@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -44,8 +45,9 @@ namespace WipSageWeb.Controllers
 
         // GET /WipPa
         // Ohne Anmeldung wird nur die leere Seite mit dem Anmelde-Popup geliefert - keine Daten.
+        // GET /WipPa?ausHistory=true - Rückkehr aus der History: die PAs aus dem Zwischenspeicher (siehe LoadAsync)
         [HttpGet]
-        public async Task<IActionResult> Index(CancellationToken cancellationToken)
+        public async Task<IActionResult> Index(CancellationToken cancellationToken, bool ausHistory = false)
         {
             var user = HttpContext.Session.GetLoginUser();
             if (user == null)
@@ -59,7 +61,7 @@ namespace WipSageWeb.Controllers
             }
 
             // Jedes Laden der Seite bekommt eine eigene Kennung für die Sperren beim Export (siehe SperrKennung)
-            var model = await LoadAsync(user, SperrKennung.Neu(), cancellationToken);
+            var model = await LoadAsync(user, SperrKennung.Neu(), cancellationToken, ausHistory);
             return View(model);
         }
 
@@ -120,6 +122,95 @@ namespace WipSageWeb.Controllers
                 _logger.LogError(ex, "Fehler beim Aufruf von WIPSage_ProcR_getWIP_PaketAnaEx für PA {PA}", pa);
                 return StatusCode(500);
             }
+        }
+
+        // Höchstzahl der Zeilen auf der History-Seite - bei mehr Treffern weist die Seite darauf hin
+        private const int HistoryMaxZeilen = 500;
+
+        // Die Suchfelder der History bleiben in der Sitzung gespeichert, bis "Zurücksetzen" oder Abmelden
+        private const string HistoryFilterKey = "WipSage.HistoryFilter";
+
+        // GET /WipPa/History?pa=..&kunde=..&vorgang=..&belegnr=..&belegdatum=2026-11-17 - an Sage übertragene PAs
+        // aus dbo.WIPSageUebertragenePAs_V suchen. Ohne Anmeldung oder Berechtigung zurück zur Startseite
+        // (Anmelde-Popup bzw. Hinweis). Zahlenfelder: nur Ziffern, höchstens 10; Belegdatum: yyyy-MM-dd (input type=date).
+        // Ohne Parameter (Button auf der Hauptseite): die zuletzt eingestellten Suchfelder; ?reset=1 leert sie.
+        // Ist kein Suchfeld gefüllt, zeigt die Seite nur die letzten Konfig.SageHistoryDays Tage.
+        [HttpGet]
+        public async Task<IActionResult> History(string pa, string kunde, string vorgang, string belegnr, string belegdatum, string reset, CancellationToken cancellationToken)
+        {
+            if (DenyUnlessAuthorized(out _) != null)
+            {
+                return RedirectToAction(nameof(Index));
+            }
+
+            if (!string.IsNullOrEmpty(reset))
+            {
+                HttpContext.Session.Remove(HistoryFilterKey);
+                pa = kunde = vorgang = belegnr = belegdatum = null;
+            }
+            else if (Request.Query.Count == 0)
+            {
+                // Erneut geöffnet: die gespeicherten Suchfelder wieder einsetzen ("pa|kunde|vorgang|belegnr|belegdatum")
+                var gespeichert = (HttpContext.Session.GetString(HistoryFilterKey) ?? "").Split('|');
+                if (gespeichert.Length == 5)
+                {
+                    pa = gespeichert[0]; kunde = gespeichert[1]; vorgang = gespeichert[2]; belegnr = gespeichert[3]; belegdatum = gespeichert[4];
+                }
+            }
+
+            var model = new HistoryViewModel
+            {
+                MaxZeilen = HistoryMaxZeilen,
+                Filter = new HistoryFilter
+                {
+                    PA = Ganzzahl(pa),
+                    Kunde = Ganzzahl(kunde),
+                    Vorgang = Ganzzahl(vorgang),
+                    BelegNummer = Ganzzahl(belegnr),
+                    BelegDatum = DateTime.TryParseExact((belegdatum ?? "").Trim(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var datum) ? datum : (DateTime?)null
+                }
+            };
+
+            // Gültige Werte merken - beim nächsten Öffnen der History stehen sie wieder in den Suchfeldern
+            var filter = model.Filter;
+            HttpContext.Session.SetString(HistoryFilterKey, string.Join("|",
+                filter.PA?.ToString(), filter.Kunde?.ToString(), filter.Vorgang?.ToString(), filter.BelegNummer?.ToString(),
+                filter.BelegDatum?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
+
+            try
+            {
+                // Ohne Suchfeld nur die letzten Tage (Konfig.SageHistoryDays; leer oder 0 = alle)
+                if (filter.IstLeer)
+                {
+                    var tage = (await _repository.GetSageKonfigAsync(cancellationToken)).HistoryDays;
+                    if (tage > 0)
+                    {
+                        model.LetzteTage = tage;
+                        filter.Seit = DateTime.Today.AddDays(-tage.Value);
+                    }
+                }
+
+                var rows = await _repository.GetUebertragenePAsAsync(filter, HistoryMaxZeilen, cancellationToken);
+                model.MehrTreffer = rows.Count > HistoryMaxZeilen;
+                model.Rows = rows.Take(HistoryMaxZeilen).ToList();
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                _logger.LogError(ex, "Fehler beim Lesen von WIPSageUebertragenePAs_V");
+                model.ErrorMessage = $"Die übertragenen PAs konnten nicht gelesen werden ({DateTime.Now:dd.MM.yyyy HH:mm:ss}): {ex.Message}";
+            }
+
+            // Zurück-Symbol im Header (links neben dem Home-Symbol) führt auf die PA-Liste - mit den zwischengespeicherten PAs
+            ViewData["ZurueckUrl"] = Url.Action(nameof(Index), new { ausHistory = true });
+            return View(model);
+        }
+
+        // Nur Ziffern, höchstens 10 - alles andere gilt als leeres Feld (filtert nicht)
+        private static long? Ganzzahl(string text)
+        {
+            text = (text ?? "").Trim();
+            return text.Length > 0 && text.Length <= 10 && text.All(char.IsDigit) ? long.Parse(text, System.Globalization.CultureInfo.InvariantCulture) : (long?)null;
         }
 
         // POST /WipPa/Login - aus dem Anmelde-Popup
@@ -437,12 +528,39 @@ namespace WipSageWeb.Controllers
             }
         }
 
-        private async Task<WipPaListViewModel> LoadAsync(LoginUser user, string seite, CancellationToken cancellationToken)
+        // Zwischenspeicher für das Ergebnis von WIPSage_ProcR_getWIP_PAs je Anmeldung: Rückkehr aus der History ohne
+        // den teuren Prozeduraufruf. Zustand und Rückmeldung aus SageHDR werden trotzdem jedes Mal frisch gelesen.
+        private static readonly TimeSpan PaZwischenspeicherDauer = TimeSpan.FromHours(1);
+
+        private sealed class PaZwischenspeicher
+        {
+            public List<WipPa> Rows;
+            public DateTime Stand;
+        }
+
+        private static string PaCacheKey(LoginUser user) => "WipPAs:" + user.UserNr + ":" + user.Sitzung;
+
+        // ausZwischenspeicher: Rückkehr aus der History - die PAs aus dem Zwischenspeicher nehmen, falls vorhanden
+        private async Task<WipPaListViewModel> LoadAsync(LoginUser user, string seite, CancellationToken cancellationToken, bool ausZwischenspeicher = false)
         {
             var model = new WipPaListViewModel { IsLoggedIn = true, IsAuthorized = true, Seite = seite };
             try
             {
-                model.Rows = (await _repository.GetWipPAsAsync(cancellationToken)).ToList();
+                user = EnsureSitzung(user);
+                if (ausZwischenspeicher && _cache.TryGetValue(PaCacheKey(user), out PaZwischenspeicher gespeichert))
+                {
+                    // Kopien: LoadAsync setzt unten Zustand, Auswahl usw. - der Zwischenspeicher bleibt unverändert
+                    model.Rows = gespeichert.Rows.Select(r => r.Kopie()).ToList();
+                    model.DatenStand = gespeichert.Stand;
+                    model.AusZwischenspeicher = true;
+                }
+                else
+                {
+                    model.Rows = (await _repository.GetWipPAsAsync(cancellationToken)).ToList();
+                    model.DatenStand = DateTime.Now;
+                    _cache.Set(PaCacheKey(user), new PaZwischenspeicher { Rows = model.Rows.Select(r => r.Kopie()).ToList(), Stand = model.DatenStand.Value },
+                        PaZwischenspeicherDauer);
+                }
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
