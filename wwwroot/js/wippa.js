@@ -841,6 +841,7 @@ const WipMessage = (function () {
         delete box.dataset.uebergeben;
         box.removeAttribute('title');
         box.checked = true;
+        box.disabled = false;   // sonst zählt der Zähler die Zeile nicht (gesperrte Boxen zählen nicht mit)
         row.classList.remove('is-exported');
         row.dataset.status = '0';   // wieder "neu" (Status-Filter)
         row.querySelector('.col-status').innerHTML = '';

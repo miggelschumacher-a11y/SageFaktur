@@ -43,6 +43,13 @@ namespace WipSageWeb.Controllers
             _logger = logger;
         }
 
+        // Bei jedem Seitenaufruf: aufrufende Seite merken (Ziel von Home-Symbol und Logo, siehe AufruferSeite)
+        public override void OnActionExecuting(Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext context)
+        {
+            AufruferSeite.Merken(HttpContext);
+            base.OnActionExecuting(context);
+        }
+
         // GET /WipPa
         // Ohne Anmeldung wird nur die leere Seite mit dem Anmelde-Popup geliefert - keine Daten.
         // GET /WipPa?ausHistory=true - Rückkehr aus der History: die PAs aus dem Zwischenspeicher (siehe LoadAsync)
@@ -276,7 +283,9 @@ namespace WipSageWeb.Controllers
         {
             // Abmelden: Sperren aller Seiten dieser Anmeldung freigeben
             await SperrenFreigebenAsync(HttpContext.Session.GetLoginUser(), null, true, cancellationToken);
+            var aufrufer = AufruferSeite.Lesen(HttpContext.Session);   // Ziel von Home/Logo bleibt erhalten
             HttpContext.Session.Clear();
+            AufruferSeite.Setzen(HttpContext.Session, aufrufer);
             if (HasReturnUrl)
             {
                 return Redirect(_loginOptions.ReturnUrl);

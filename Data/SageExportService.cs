@@ -82,8 +82,8 @@ namespace WipSageWeb.Data
         /// <summary>Konfig.SageTest: Testbetrieb - Artikelnummer in den XML-Daten immer die Test-Artikelnummer.</summary>
         public bool Test { get; set; }
 
-        /// <summary>Konfig.SageTestExportOrdner - nur bei <see cref="Test"/> gesetzt: dorthin zusätzlich eine Kopie der XML-Daten.</summary>
-        public string TestExportOrdner { get; set; }
+        /// <summary>Konfig.SageTestExportOrdner - nur gesetzt, wenn Konfig.SageCreateXML_File gesetzt ist: dorthin zusätzlich die XML-Datei.</summary>
+        public string XmlExportOrdner { get; set; }
 
         /// <summary>Konfig.SagePrintKey - Druckschlüssel in der XML (Order/Druckschluessel).</summary>
         public short? Druckschluessel { get; set; }
@@ -159,7 +159,7 @@ namespace WipSageWeb.Data
             {
                 Url = url,
                 Test = konfig.Test,
-                TestExportOrdner = konfig.Test && !string.IsNullOrWhiteSpace(konfig.TestExportOrdner) ? konfig.TestExportOrdner.Trim() : null,
+                XmlExportOrdner = konfig.CreateXmlFile && !string.IsNullOrWhiteSpace(konfig.TestExportOrdner) ? konfig.TestExportOrdner.Trim() : null,
                 Druckschluessel = konfig.PrintKey,
                 Inhaber = inhaber
             };
@@ -238,7 +238,7 @@ namespace WipSageWeb.Data
                 await _repository.SagePosErsetzenAsync(pa, zeilen, cancellationToken);
 
                 var dokument = BuildDocument(pa, paPositions, job.Test, job.Druckschluessel);
-                TestKopieSpeichern(job, pa, dokument);
+                XmlDateiSpeichern(job, pa, dokument);
                 antwort = await _sage.PostXmlTransactionAsync(job.Url, dokument, cancellationToken);
             }
             catch (SageKeineAntwortException)
@@ -293,24 +293,25 @@ namespace WipSageWeb.Data
             return new SageExportSchritt { PA = pa, Ergebnis = SageExportErgebnis.Uebergeben, OfficeLineHandle = handle, OfficeLineVorgangsHandle = Handle(antwort.OfficeLineVorgangsHandle), Meldung = antwort.Fehlermeldung };
         }
 
-        // Testbetrieb: Kopie der XML-Daten in Konfig.SageTestExportOrdner, z. B. "PA_41001_20261103_141530.xml" - vor dem
-        // Senden, damit sie auch bei abgelehnten Aufträgen vorliegt. Klappt das Schreiben nicht, wird der PA übersprungen.
-        private static void TestKopieSpeichern(SageExportJob job, int pa, XDocument dokument)
+        // Konfig.SageCreateXML_File gesetzt (egal ob Testbetrieb): XML-Datei in Konfig.SageTestExportOrdner, z. B.
+        // "PA_41001_20261103_141530.xml" - vor dem Senden, damit sie auch bei abgelehnten Aufträgen vorliegt.
+        // Klappt das Schreiben nicht, wird der PA übersprungen.
+        private static void XmlDateiSpeichern(SageExportJob job, int pa, XDocument dokument)
         {
-            if (job.TestExportOrdner == null)
+            if (job.XmlExportOrdner == null)
             {
                 return;
             }
-            var datei = Path.Combine(job.TestExportOrdner, $"PA_{pa}_{DateTime.Now:yyyyMMdd_HHmmss}.xml");
+            var datei = Path.Combine(job.XmlExportOrdner, $"PA_{pa}_{DateTime.Now:yyyyMMdd_HHmmss}.xml");
             try
             {
-                Directory.CreateDirectory(job.TestExportOrdner);
+                Directory.CreateDirectory(job.XmlExportOrdner);
                 dokument.Save(datei);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
             {
                 throw new SageExportException(
-                    $"PA {pa}: Die Kopie der XML-Daten konnte nicht gespeichert werden (Testbetrieb, Konfig.SageTestExportOrdner):\n{datei}\n{ex.Message}", ex);
+                    $"PA {pa}: Die XML-Datei konnte nicht gespeichert werden (Konfig.SageCreateXML_File, Ordner Konfig.SageTestExportOrdner):\n{datei}\n{ex.Message}", ex);
             }
         }
 
@@ -419,6 +420,10 @@ namespace WipSageWeb.Data
         //     Kopftext            fester Text: USD = 0 -> englisch, sonst deutsch
         //     Kto                  Kunde_Auftraggeber, fünfstellig mit führenden Nullen (nur reine Zahlen)
         //     LIMSIdentifier       BelegMatchCode (PA-Nummer)
+        //     LeiZeitraumBis
+        //       Data               Leistungszeitraum_bis (= Lieferdatum), Format wie Liefertermin; leer -> nil
+        //     LeiZeitraumVon
+        //       Data               LeistungsZeitraum_von (= PA-Datum), Format wie Liefertermin; leer -> nil
         //     Liefertermin
         //       Data               Lieferdatum im Format "2026-02-24 12:00:00 +01" (siehe Liefertermin)
         //     Matchcode            BelegMatchCode (PA-Nummer; eine Spalte "Matchcode" liefert die Prozedur nicht)
@@ -446,7 +451,7 @@ namespace WipSageWeb.Data
         //             OfficeLineItem
         //               Artikelnummer    immer TestArtikelnummer (04005019)
         //             Price              VK (nicht mehr Endpreis)
-        //     Wkz                  USD = 0 -> "USD", sonst "EUR"
+        //     Wkz                  USD = 1 -> "USD", sonst (0 oder leer) "EUR"
         // ------------------------------------------------------------------------------------------
         private static readonly XNamespace Ns = "http://schemas.datacontract.org/2004/07/appulsive.Intertek.LIMSService";
         private static readonly XNamespace Xsi = "http://www.w3.org/2001/XMLSchema-instance";
@@ -467,6 +472,8 @@ namespace WipSageWeb.Data
                 Element("Kopftext", englisch ? KopftextEnglisch : KopftextDeutsch),
                 Element("Kto", Kto(head)),
                 Element("LIMSIdentifier", matchcode),
+                LeiZeitraumBis(head),
+                LeiZeitraumVon(head),
                 Liefertermin(head),
                 Element("Matchcode", matchcode),
                 Element("OfficeLineHandle", null),
@@ -544,9 +551,14 @@ namespace WipSageWeb.Data
         // <Liefertermin><Data>2026-02-24 12:00:00 +01</Data></Liefertermin> aus der Spalte Lieferdatum: Datum ohne Uhrzeit
         // gilt als 12:00 Uhr (wie in der Vorgabe), dahinter der Abstand zu UTC an diesem Tag (+01 Winterzeit, +02 Sommerzeit).
         // Ohne Lieferdatum: <Liefertermin i:nil="true"/>.
-        private static XElement Liefertermin(WipPaketAna p)
+        private static XElement Liefertermin(WipPaketAna p) => DatumElement("Liefertermin", GetColumn(p, "Lieferdatum"));
+
+        // <LeiZeitraumVon>/<LeiZeitraumBis> aus LeistungsZeitraum_von / Leistungszeitraum_bis, Format wie Liefertermin
+        private static XElement LeiZeitraumVon(WipPaketAna p) => DatumElement("LeiZeitraumVon", p.LeistungsZeitraumVon);
+        private static XElement LeiZeitraumBis(WipPaketAna p) => DatumElement("LeiZeitraumBis", p.LeistungsZeitraumBis);
+
+        private static XElement DatumElement(string elementName, object wert)
         {
-            var wert = GetColumn(p, "Lieferdatum");
             DateTime datum;
             if (wert is DateTime d)
             {
@@ -554,14 +566,14 @@ namespace WipSageWeb.Data
             }
             else if (wert == null || !DateTime.TryParse(Convert.ToString(wert, CultureInfo.InvariantCulture), CultureInfo.GetCultureInfo("de-DE"), DateTimeStyles.None, out datum))
             {
-                return Element("Liefertermin", null);
+                return Element(elementName, null);
             }
             if (datum.TimeOfDay == TimeSpan.Zero)
             {
                 datum = datum.Date.AddHours(12);
             }
             var termin = new DateTimeOffset(DateTime.SpecifyKind(datum, DateTimeKind.Unspecified), TimeZoneInfo.Local.GetUtcOffset(datum));
-            return new XElement(Ns + "Liefertermin",
+            return new XElement(Ns + elementName,
                 new XElement(Ns + "Data", termin.ToString("yyyy-MM-dd HH:mm:ss zz", CultureInfo.InvariantCulture)));
         }
 
@@ -614,8 +626,8 @@ namespace WipSageWeb.Data
         // Spalte USD = 0 -> englische Texte. Jeder andere Wert (auch NULL) -> deutsche Texte.
         private static bool IstUsdNull(WipPaketAna position) => UsdWert(position) == 0m;
 
-        // Währungskürzel für Sage: Spalte USD = 0 -> "USD", jeder andere Wert (auch NULL) -> "EUR"
-        private static string Waehrung(WipPaketAna position) => UsdWert(position) == 0m ? "USD" : "EUR";
+        // Währungskürzel für Sage: Spalte USD = 1 -> "USD", sonst (0, NULL, andere Werte) -> "EUR"
+        private static string Waehrung(WipPaketAna position) => UsdWert(position) == 1m ? "USD" : "EUR";
 
         private static decimal? UsdWert(WipPaketAna position)
         {

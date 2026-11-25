@@ -84,10 +84,13 @@ namespace WipSageWeb.Data
         public string ExportUrlFeld { get; set; }
 
         /// <summary>
-        /// Konfig.SageTestExportOrdner: Ordner, in den bei <see cref="Test"/> = true zusätzlich eine Kopie jeder
-        /// gesendeten XML-Datei geschrieben wird; null, wenn nichts hinterlegt ist (dann keine Kopie).
+        /// Konfig.SageTestExportOrdner: Ordner, in den bei <see cref="CreateXmlFile"/> = true zusätzlich jede
+        /// gesendete XML-Datei geschrieben wird; null, wenn nichts hinterlegt ist (dann keine Datei).
         /// </summary>
         public string TestExportOrdner { get; set; }
+
+        /// <summary>Konfig.SageCreateXML_File: XML-Datei in <see cref="TestExportOrdner"/> erzeugen - unabhängig von <see cref="Test"/>.</summary>
+        public bool CreateXmlFile { get; set; }
 
         /// <summary>Konfig.SagePrintKey: Druckschlüssel des Auftrags in Sage (Order/Druckschluessel); null, wenn nicht hinterlegt.</summary>
         public short? PrintKey { get; set; }
