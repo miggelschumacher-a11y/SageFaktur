@@ -25,6 +25,7 @@ namespace WipSageWeb
             services.AddScoped<ILoginService, LoginService>();
             services.AddScoped<ISageExportService, SageExportService>();
             services.AddHttpClient<ISageSchnittstelle, SageSchnittstelle>();   // Versand der Aufträge an Konfig.SageExportUrl
+            services.AddHttpClient<ISageBelegAbfrage, SageBelegAbfrage>();     // Belege je PA für die History (Konfig.SageResponseUrl)
 
             // Die Anmeldung liegt in der Server-Session; nach 30 Minuten ohne Aktivität läuft sie ab
             services.AddMemoryCache();   // hält vorbereitete Exporte zwischen den Einzelschritten

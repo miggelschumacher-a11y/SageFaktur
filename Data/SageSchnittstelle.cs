@@ -95,13 +95,26 @@ namespace WipSageWeb.Data
         /// <summary>Konfig.SagePrintKey: Druckschlüssel des Auftrags in Sage (Order/Druckschluessel); null, wenn nicht hinterlegt.</summary>
         public short? PrintKey { get; set; }
 
+        /// <summary>
+        /// Konfig.Artikelnummer: Artikelnummer (OfficeLineItem/Artikelnummer) aller Positionen im echten Betrieb
+        /// (<see cref="Test"/> = false); null, wenn nichts hinterlegt ist. Im Testbetrieb gilt weiter
+        /// <see cref="SageExportService.TestArtikelnummer"/>.
+        /// </summary>
+        public string Artikelnummer { get; set; }
+
         /// <summary>Konfig.SageHistoryDays: die History zeigt beim Öffnen nur die Übertragungen der letzten so vielen Tage; null/0 = alle.</summary>
         public int? HistoryDays { get; set; }
 
         /// <summary>
+        /// Konfig.SageResultUrl: Abfrage der Belege eines PA in Sage (JSON) für die History; null, wenn nichts hinterlegt
+        /// ist - dann zeigt die History die Belege aus der View.
+        /// </summary>
+        public string ResponseUrl { get; set; }
+
+        /// <summary>
         /// Konfig.SageTest: Testbetrieb. Dann geht der Auftrag an Konfig.SageTestExportURL (sonst an
         /// Konfig.SageReleaseExportURL), und in den XML-Daten stehen als Artikelnummer immer
-        /// <see cref="SageExportService.TestArtikelnummer"/> und als Kostenstelle immer
+        /// <see cref="SageExportService.TestArtikelnummer"/> (sonst <see cref="Artikelnummer"/>) und als Kostenstelle immer
         /// <see cref="SageExportService.TestKostenstelle"/>.
         /// </summary>
         public bool Test { get; set; }

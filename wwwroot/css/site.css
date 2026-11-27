@@ -525,6 +525,8 @@ table.grid tr.detail-row.has-problem table.detail-grid tbody td { background-col
 /* Jede zweite Zeile im dezenten Gelb der Hauptseite (wie angehakte Zeilen, --selected) */
 table.grid.history-grid tbody tr:nth-child(even) { background: var(--selected); }
 table.grid.history-grid tbody tr:nth-child(even):hover { background: rgba(255, 199, 0, .24); }
+/* Sage-Abfrage (Konfig.SageResultUrl) für diesen PA fehlgeschlagen - Belege aus der Datenbank */
+table.grid.history-grid tbody tr.sage-fehler td { color: #b71c1c; font-style: italic; }
 
 .btn {
     display: inline-flex;

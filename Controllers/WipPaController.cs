@@ -23,6 +23,7 @@ namespace WipSageWeb.Controllers
         private readonly IWipSageRepository _repository;
         private readonly ILoginService _loginService;
         private readonly ISageExportService _exportService;
+        private readonly ISageBelegAbfrage _belegAbfrage;
         private readonly IMemoryCache _cache;
         private readonly LoginOptions _loginOptions;
         private readonly ILogger<WipPaController> _logger;
@@ -31,6 +32,7 @@ namespace WipSageWeb.Controllers
             IWipSageRepository repository,
             ILoginService loginService,
             ISageExportService exportService,
+            ISageBelegAbfrage belegAbfrage,
             IMemoryCache cache,
             IOptions<LoginOptions> loginOptions,
             ILogger<WipPaController> logger)
@@ -38,6 +40,7 @@ namespace WipSageWeb.Controllers
             _repository = repository;
             _loginService = loginService;
             _exportService = exportService;
+            _belegAbfrage = belegAbfrage;
             _cache = cache;
             _loginOptions = loginOptions.Value;
             _logger = logger;
@@ -185,12 +188,16 @@ namespace WipSageWeb.Controllers
                 filter.PA?.ToString(), filter.Kunde?.ToString(), filter.Vorgang?.ToString(), filter.BelegNummer?.ToString(),
                 filter.BelegDatum?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)));
 
+            string responseUrl = null;
             try
             {
+                var konfig = await _repository.GetSageKonfigAsync(cancellationToken);
+                responseUrl = string.IsNullOrWhiteSpace(konfig.ResponseUrl) ? null : konfig.ResponseUrl.Trim();
+
                 // Ohne Suchfeld nur die letzten Tage (Konfig.SageHistoryDays; leer oder 0 = alle)
                 if (filter.IstLeer)
                 {
-                    var tage = (await _repository.GetSageKonfigAsync(cancellationToken)).HistoryDays;
+                    var tage = konfig.HistoryDays;
                     if (tage > 0)
                     {
                         model.LetzteTage = tage;
@@ -208,9 +215,73 @@ namespace WipSageWeb.Controllers
                 model.ErrorMessage = $"Die übertragenen PAs konnten nicht gelesen werden ({DateTime.Now:dd.MM.yyyy HH:mm:ss}): {ex.Message}";
             }
 
+            // Belege je PA direkt aus Sage (Konfig.SageResultUrl) - füllen die Lieferschein- und Rechnungs-Spalten, die in der View leer sind
+            if (responseUrl != null && model.Rows.Count > 0)
+            {
+                await SageBelegeAbfragenAsync(responseUrl, model, cancellationToken);
+            }
+
             // Zurück-Symbol im Header (links neben dem Home-Symbol) führt auf die PA-Liste - mit den zwischengespeicherten PAs
             ViewData["ZurueckUrl"] = Url.Action(nameof(Index), new { ausHistory = true });
             return View(model);
+        }
+
+        // Höchstzahl gleichzeitiger Abfragen an Konfig.SageResultUrl
+        private const int SageAbfragenParallel = 8;
+
+        // Fragt für jede Zeile mit leeren Lieferschein- oder Rechnungs-Spalten (je PA einmal) die Belege in Sage ab und
+        // überträgt sie in die leeren Spalten (SageBelegAbfrage.Uebernehmen) - Werte aus der Datenbank haben Vorrang.
+        // Schlägt die Abfrage für einen PA fehl, bleiben in seinen Zeilen die Werte aus der View; die Seite weist darauf hin.
+        private async Task SageBelegeAbfragenAsync(string responseUrl, HistoryViewModel model, CancellationToken cancellationToken)
+        {
+            var fehler = new Dictionary<int, string>();
+            using (var gleichzeitig = new SemaphoreSlim(SageAbfragenParallel))
+            {
+                // Nur PAs, bei denen die Lieferschein- oder die Rechnungs-Spalten noch nicht aus der Datenbank gefüllt sind
+                var abfragen = model.Rows
+                    .Where(r => !SageBelegAbfrage.LieferscheinAusDatenbank(r) || !SageBelegAbfrage.RechnungAusDatenbank(r))
+                    .Select(r => r.PA).Distinct().Select(async pa =>
+                {
+                    await gleichzeitig.WaitAsync(cancellationToken);
+                    try
+                    {
+                        return (pa: pa, zeilen: await _belegAbfrage.AbfragenAsync(responseUrl, pa, cancellationToken), fehler: (string)null);
+                    }
+                    catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+                    {
+                        _logger.LogError(ex, "Sage-Abfrage (Konfig.SageResultUrl) für PA {PA} fehlgeschlagen", pa);
+                        return (pa: pa, zeilen: (IReadOnlyList<SageBelegZeile>)null, fehler: ex.Message);
+                    }
+                    finally
+                    {
+                        gleichzeitig.Release();
+                    }
+                }).ToList();
+
+                foreach (var ergebnis in await Task.WhenAll(abfragen))
+                {
+                    if (ergebnis.fehler != null)
+                    {
+                        fehler[ergebnis.pa] = ergebnis.fehler;
+                        continue;
+                    }
+                    foreach (var row in model.Rows.Where(r => r.PA == ergebnis.pa))
+                    {
+                        SageBelegAbfrage.Uebernehmen(row, ergebnis.zeilen);
+                    }
+                }
+            }
+
+            if (fehler.Count > 0)
+            {
+                foreach (var row in model.Rows.Where(r => fehler.ContainsKey(r.PA)))
+                {
+                    row.SageAbfrageFehler = fehler[row.PA];
+                }
+                var beispiel = fehler.OrderBy(f => f.Key).First();
+                model.SageHinweis = $"Die Belege konnten für {fehler.Count} PA(s) nicht aus Sage gelesen werden (Konfig.SageResultUrl) - " +
+                                    $"dort stehen die Werte aus der Datenbank (Zeilen markiert). PA {beispiel.Key}: {beispiel.Value}";
+            }
         }
 
         // Nur Ziffern, höchstens 10 - alles andere gilt als leeres Feld (filtert nicht)

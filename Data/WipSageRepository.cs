@@ -200,7 +200,8 @@ namespace WipSageWeb.Data
             // SageTest entscheidet, welche Adresse gilt: true -> SageTestExportURL, false -> SageReleaseExportURL.
             // SageCreateXML_File gesetzt: zusätzlich eine XML-Datei in SageTestExportOrdner (unabhängig von SageTest).
             // SagePrintKey: Druckschlüssel in der XML (Order/Druckschluessel). SageHistoryDays: Zeitraum der History beim Öffnen
-            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner, SagePrintKey, SageHistoryDays, SageCreateXML_File from dbo.Konfig order by ID;", connection))
+            // SageResultUrl: Abfrage der Belege eines PA in Sage für die History
+            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner, SagePrintKey, SageHistoryDays, SageCreateXML_File, SageResultUrl, Artikelnummer from dbo.Konfig order by ID;", connection))
             {
                 await connection.OpenAsync(cancellationToken);
                 using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -218,7 +219,9 @@ namespace WipSageWeb.Data
                         TestExportOrdner = GetString(reader, 3),
                         PrintKey = GetShort(reader, 4),
                         HistoryDays = GetInt(reader, 5),
-                        CreateXmlFile = IstWahr(reader.IsDBNull(6) ? null : reader.GetValue(6))
+                        CreateXmlFile = IstWahr(reader.IsDBNull(6) ? null : reader.GetValue(6)),
+                        ResponseUrl = GetString(reader, 7),
+                        Artikelnummer = GetString(reader, 8)   // Artikelnummer: gilt bei SageTest = false
                     };
                 }
             }
@@ -698,14 +701,18 @@ SELECT @Anzahl;";
             const string sql = @"
                                 SELECT TOP (@Max)
                                        v.PA, v.Nummer, v.KKuerzel, v.AnSageGesendetVon, v.AnSageGesendetAm, v.ImportStatus
-                                     , v.OfficeLineVorgangsHandle, v.Belegjahr, v.BelegDatum, v.BelegNummer, v.Mandant, v.BelegArt
+                                     , v.OfficeLineVorgangsHandle
+                                     , v.LiefDat, v.BelegJahrL, v.LiefNr
+                                     , v.Rechnungsart, v.RechDat, v.BelegJahrR, v.RechNr
                                      , v.OfficeLineHandle
                                 FROM dbo.WIPSageUebertragenePAs_V v
                                 WHERE (@PA IS NULL OR v.PA = @PA)
                                   AND (@Kunde IS NULL OR v.Nummer = @Kunde)
                                   AND (@Vorgang IS NULL OR v.OfficeLineVorgangsHandle = @Vorgang)
-                                  AND (@BelegNummer IS NULL OR v.BelegNummer = @BelegNummer)
-                                  AND (@BelegDatum IS NULL OR (v.BelegDatum >= @BelegDatum AND v.BelegDatum < DATEADD(DAY, 1, @BelegDatum)))
+                                  AND (@BelegNummer IS NULL OR v.LiefNr = @BelegNummer OR v.RechNr = @BelegNummer)
+                                  AND (@BelegDatum IS NULL
+                                       OR (v.LiefDat >= @BelegDatum AND v.LiefDat < DATEADD(DAY, 1, @BelegDatum))
+                                       OR (v.RechDat >= @BelegDatum AND v.RechDat < DATEADD(DAY, 1, @BelegDatum)))
                                   AND (@Seit IS NULL OR v.AnSageGesendetAm >= @Seit)
                                 ORDER BY v.AnSageGesendetAm DESC, v.PA DESC
                                 OPTION (RECOMPILE);";
@@ -736,12 +743,15 @@ SELECT @Anzahl;";
                             AnSageGesendetAm = GetDateTime(reader, 4),
                             ImportStatus = GetString(reader, 5),
                             OfficeLineVorgangsHandle = GetInt(reader, 6),
-                            Belegjahr = GetInt(reader, 7),
-                            BelegDatum = GetDateTime(reader, 8),
-                            BelegNummer = GetInt(reader, 9),
-                            Mandant = GetInt(reader, 10),
-                            BelegArt = GetString(reader, 11),
-                            OfficeLineHandle = GetInt(reader, 12)
+                            LiefDat = GetDateTime(reader, 7),
+                            BelegJahrL = GetInt(reader, 8),
+                            LiefNr = GetInt(reader, 9),
+                            Lieferscheinart = reader.IsDBNull(9) ? null : "Lieferschein",   // die View nimmt nur Belegart 'Lieferschein'
+                            Rechnungsart = GetString(reader, 10),
+                            RechDat = GetDateTime(reader, 11),
+                            BelegJahrR = GetInt(reader, 12),
+                            RechNr = GetInt(reader, 13),
+                            OfficeLineHandle = GetInt(reader, 14)
                         });
                     }
                 }

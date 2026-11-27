@@ -79,8 +79,14 @@ namespace WipSageWeb.Data
         public string Url { get; set; }
         public List<int> PAs { get; } = new List<int>();
 
-        /// <summary>Konfig.SageTest: Testbetrieb - Artikelnummer in den XML-Daten immer die Test-Artikelnummer.</summary>
+        /// <summary>Konfig.SageTest: Testbetrieb - Test-Kostenstelle und Test-Artikelnummer in den XML-Daten.</summary>
         public bool Test { get; set; }
+
+        /// <summary>
+        /// Artikelnummer aller Positionen (OfficeLineItem/Artikelnummer): bei Konfig.SageTest = true
+        /// <see cref="SageExportService.TestArtikelnummer"/>, sonst Konfig.Artikelnummer.
+        /// </summary>
+        public string Artikelnummer { get; set; }
 
         /// <summary>Konfig.SageTestExportOrdner - nur gesetzt, wenn Konfig.SageCreateXML_File gesetzt ist: dorthin zusätzlich die XML-Datei.</summary>
         public string XmlExportOrdner { get; set; }
@@ -155,10 +161,19 @@ namespace WipSageWeb.Data
                     $"Die Adresse der Sage-Schnittstelle ist keine gültige http- oder https-Adresse:\n{url}\n(Tabelle Konfig, Feld {konfig.ExportUrlFeld})");
             }
 
+            // Artikelnummer: im Testbetrieb wie bisher die Test-Artikelnummer, sonst Konfig.Artikelnummer - ohne sie wird nichts gesendet
+            var artikelnummer = konfig.Test ? TestArtikelnummer : (konfig.Artikelnummer ?? "").Trim();
+            if (artikelnummer.Length == 0)
+            {
+                throw new SageExportException(
+                    "In der Konfiguration ist keine Artikelnummer hinterlegt (Tabelle Konfig, Feld Artikelnummer, weil SageTest = false).");
+            }
+
             var job = new SageExportJob
             {
                 Url = url,
                 Test = konfig.Test,
+                Artikelnummer = artikelnummer,
                 XmlExportOrdner = konfig.CreateXmlFile && !string.IsNullOrWhiteSpace(konfig.TestExportOrdner) ? konfig.TestExportOrdner.Trim() : null,
                 Druckschluessel = konfig.PrintKey,
                 Inhaber = inhaber
@@ -237,7 +252,7 @@ namespace WipSageWeb.Data
                 zeilen = SagePosZeilen(pa, paPositions);
                 await _repository.SagePosErsetzenAsync(pa, zeilen, cancellationToken);
 
-                var dokument = BuildDocument(pa, paPositions, job.Test, job.Druckschluessel);
+                var dokument = BuildDocument(pa, paPositions, job.Test, job.Artikelnummer, job.Druckschluessel);
                 XmlDateiSpeichern(job, pa, dokument);
                 antwort = await _sage.PostXmlTransactionAsync(job.Url, dokument, cancellationToken);
             }
@@ -449,7 +464,7 @@ namespace WipSageWeb.Data
         //             Menge              Menge
         //             OfficeLineHandle   nil
         //             OfficeLineItem
-        //               Artikelnummer    immer TestArtikelnummer (04005019)
+        //               Artikelnummer    Konfig.SageTest = true: TestArtikelnummer (04005019), sonst Konfig.Artikelnummer
         //             Price              VK (nicht mehr Endpreis)
         //     Wkz                  USD = 1 -> "USD", sonst (0 oder leer) "EUR"
         // ------------------------------------------------------------------------------------------
@@ -459,7 +474,7 @@ namespace WipSageWeb.Data
         private const string KopftextEnglisch = "We thank you very much for your order and charge the services rendered as follows:";
         private const string KopftextDeutsch ="Wir danken Ihnen für den uns erteilten Auftrag und erlauben uns, folgende Services in Rechnung zu stellen:";
 
-        private static XDocument BuildDocument(int pa, List<WipPaketAna> positions, bool test, short? druckschluessel)
+        private static XDocument BuildDocument(int pa, List<WipPaketAna> positions, bool test, string artikelnummer, short? druckschluessel)
         {
             var head = positions[0];
             var englisch = IstUsdNull(head);
@@ -477,7 +492,7 @@ namespace WipSageWeb.Data
                 Liefertermin(head),
                 Element("Matchcode", matchcode),
                 Element("OfficeLineHandle", null),
-                new XElement(Ns + "Samples", BuildSamples(positions, englisch, test)),
+                new XElement(Ns + "Samples", BuildSamples(positions, englisch, test, artikelnummer)),
                 Element("Wkz", Waehrung(head)));
 
             return new XDocument(new XDeclaration("1.0", "utf-8", null), order);
@@ -488,7 +503,7 @@ namespace WipSageWeb.Data
         //  - danach nur, wenn sich der Text (Charge1, Charge2, PINummer) gegenüber dem vorherigen Sample geändert hat
         //    oder ein noch nicht verwendeter PA-Text dazukommt; sonst <Name i:nil="true"/>
         //  - die Spalte PA steht als erste Zeile nur, solange dieser PA-Text noch in keinem <Name> verwendet wurde
-        private static IEnumerable<XElement> BuildSamples(List<WipPaketAna> positions, bool englisch, bool test)
+        private static IEnumerable<XElement> BuildSamples(List<WipPaketAna> positions, bool englisch, bool test, string artikelnummer)
         {
             var verwendetePAs = new HashSet<string>(StringComparer.Ordinal);
             string vorherigerText = null;
@@ -510,7 +525,7 @@ namespace WipSageWeb.Data
                     }
                 }
                 vorherigerText = text;
-                yield return BuildSample(p, test, name);
+                yield return BuildSample(p, test, artikelnummer, name);
             }
         }
 
@@ -523,7 +538,7 @@ namespace WipSageWeb.Data
         }
 
         // name = null -> <Name i:nil="true"/>
-        private static XElement BuildSample(WipPaketAna p, bool test, string name)
+        private static XElement BuildSample(WipPaketAna p, bool test, string artikelnummer, string name)
         {
             var lims = FormatValue(GetColumn(p, "LIMSIdentifier"));
             return new XElement(Ns + "Sample",
@@ -544,7 +559,7 @@ namespace WipSageWeb.Data
                         Element("Menge", FormatValue(GetColumn(p, "Menge"))),
                         Element("OfficeLineHandle", null),
                         new XElement(Ns + "OfficeLineItem",
-                            Element("Artikelnummer", TestArtikelnummer)),
+                            Element("Artikelnummer", artikelnummer)),
                         Element("Price", FormatValue(GetColumn(p, "VK"))))));
         }
 

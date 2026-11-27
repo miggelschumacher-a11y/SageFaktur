@@ -28,11 +28,11 @@
         <input type="text" id="hVorgang" name="vorgang" class="num" value="@f.Vorgang" maxlength="10" inputmode="numeric" pattern="\d{1,10}" data-ziffern="1" />
     </div>
     <div class="history-feld">
-        <label for="hBelegNr">Belegnummer</label>
+        <label for="hBelegNr" title="Sucht in Lieferschein-Nr. und Rechnungs-Nr.">Lieferschein-/Rechnungs-Nr.</label>
         <input type="text" id="hBelegNr" name="belegnr" class="num" value="@f.BelegNummer" maxlength="10" inputmode="numeric" pattern="\d{1,10}" data-ziffern="1" />
     </div>
     <div class="history-feld">
-        <label for="hBelegDatum">Belegdatum</label>
+        <label for="hBelegDatum" title="Sucht in Lieferdatum und Rechnungsdatum">Liefer-/Rechnungsdatum</label>
         <input type="date" id="hBelegDatum" name="belegdatum" value="@(f.BelegDatum?.ToString("yyyy-MM-dd"))" />
     </div>
     <button type="submit" class="btn btn-primary">Suchen</button>
@@ -46,6 +46,10 @@
 @if (Model.LetzteTage.HasValue)
 {
     <div class="alert alert-info">Angezeigt werden die Übertragungen der letzten @Model.LetzteTage Tage (Konfig.SageHistoryDays). Für ältere PAs ein Suchfeld füllen.</div>
+}
+@if (Model.SageHinweis != null)
+{
+    <div class="alert alert-error">@Model.SageHinweis</div>
 }
 @if (Model.MehrTreffer)
 {
@@ -63,22 +67,30 @@
                 <th>Gesendet von</th>
                 <th>Import-Status</th>
                 <th class="num">Vorgangsnummer</th>
-                <th>Belegart</th>
-                <th class="num">Belegnummer</th>
-                <th>Belegdatum</th>
-                <th class="num">Belegjahr</th>
-                <th class="num">Mandant</th>
+                <th class="num">Belegjahr Lieferschein</th>
+                <th>Lieferschein</th>
+                <th class="num">Lieferschein-Nr.</th>
+                <th>Lieferdatum</th>
+                <th>Rechnungsart</th>
+                <th class="num">Belegjahr Rechnung</th>
+                <th class="num">Rechnungs-Nr.</th>
+                <th>Rechnungsdatum</th>
                 <th class="num">OfficeLineHandle</th>
             </tr>
         </thead>
         <tbody>
             @if (Model.Rows.Count == 0)
             {
-                <tr><td class="empty" colspan="13">@(Model.ErrorMessage != null ? "Keine Daten." : f.IstLeer ? (Model.LetzteTage.HasValue ? "In den letzten " + Model.LetzteTage + " Tagen wurden keine PAs an Sage übertragen." : "Es wurden noch keine PAs an Sage übertragen.") : "Keine übertragenen PAs zu dieser Suche.")</td></tr>
+                <tr><td class="empty" colspan="16">@(Model.ErrorMessage != null ? "Keine Daten." : f.IstLeer ? (Model.LetzteTage.HasValue ? "In den letzten " + Model.LetzteTage + " Tagen wurden keine PAs an Sage übertragen." : "Es wurden noch keine PAs an Sage übertragen.") : "Keine übertragenen PAs zu dieser Suche.")</td></tr>
             }
             @foreach (var r in Model.Rows)
             {
-                <tr>
+                @* Lieferschein-/Rechnungs-Spalten: aus der Sage-Abfrage (Konfig.SageResultUrl), sonst aus der View.
+                   Mehrere Lieferscheine bzw. Rechnungen in Sage: "Not unique" in allen Spalten der Gruppe. *@
+                var nichtEindeutigL = r.LieferscheinNichtEindeutig;
+                var nichtEindeutigR = r.RechnungNichtEindeutig || r.SammelRechnungNichtEindeutig;
+                const string NotUnique = "Not unique";
+                <tr class="@(r.SageAbfrageFehler != null ? "sage-fehler" : null)" title="@(r.SageAbfrageFehler != null ? "Sage-Abfrage fehlgeschlagen - Werte aus der Datenbank: " + r.SageAbfrageFehler : null)">
                     <td class="num">@r.PA</td>
                     <td class="num">@r.Nummer</td>
                     <td>@r.KKuerzel</td>
@@ -86,11 +98,14 @@
                     <td>@r.AnSageGesendetVon</td>
                     <td class="text">@r.ImportStatus</td>
                     <td class="num">@r.OfficeLineVorgangsHandle</td>
-                    <td>@r.BelegArt</td>
-                    <td class="num">@r.BelegNummer</td>
-                    <td>@(r.BelegDatum?.ToString("dd.MM.yyyy"))</td>
-                    <td class="num">@r.Belegjahr</td>
-                    <td class="num">@r.Mandant</td>
+                    <td class="num">@(nichtEindeutigL ? NotUnique : r.BelegJahrL?.ToString())</td>
+                    <td>@(nichtEindeutigL ? NotUnique : r.Lieferscheinart)</td>
+                    <td class="num">@(nichtEindeutigL ? NotUnique : r.LiefNr?.ToString())</td>
+                    <td>@(nichtEindeutigL ? NotUnique : r.LiefDat?.ToString("dd.MM.yyyy"))</td>
+                    <td>@(nichtEindeutigR ? NotUnique : r.Rechnungsart)</td>
+                    <td class="num">@(nichtEindeutigR ? NotUnique : r.BelegJahrR?.ToString())</td>
+                    <td class="num">@(nichtEindeutigR ? NotUnique : r.RechNr?.ToString())</td>
+                    <td>@(nichtEindeutigR ? NotUnique : r.RechDat?.ToString("dd.MM.yyyy"))</td>
                     <td class="num">@r.OfficeLineHandle</td>
                 </tr>
             }
