@@ -201,7 +201,7 @@ namespace WipSageWeb.Data
             // SageCreateXML_File gesetzt: zusätzlich eine XML-Datei in SageTestExportOrdner (unabhängig von SageTest).
             // SagePrintKey: Druckschlüssel in der XML (Order/Druckschluessel). SageHistoryDays: Zeitraum der History beim Öffnen
             // SageResultUrl: Abfrage der Belege eines PA in Sage für die History
-            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner, SagePrintKey, SageHistoryDays, SageCreateXML_File, SageResultUrl, Artikelnummer from dbo.Konfig order by ID;", connection))
+            using (var command = new SqlCommand("select top 1 SageTest, SageTestExportURL, SageReleaseExportURL, SageTestExportOrdner, SagePrintKey, SageHistoryDays, SageCreateXML_File, SageResultUrl, SageArtikelnummer from dbo.Konfig order by ID;", connection))
             {
                 await connection.OpenAsync(cancellationToken);
                 using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -221,7 +221,7 @@ namespace WipSageWeb.Data
                         HistoryDays = GetInt(reader, 5),
                         CreateXmlFile = IstWahr(reader.IsDBNull(6) ? null : reader.GetValue(6)),
                         ResponseUrl = GetString(reader, 7),
-                        Artikelnummer = GetString(reader, 8)   // Artikelnummer: gilt bei SageTest = false
+                        Artikelnummer = GetString(reader, 8)   // SageArtikelnummer: gilt bei SageTest = false
                     };
                 }
             }

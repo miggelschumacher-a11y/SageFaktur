@@ -96,7 +96,7 @@ namespace WipSageWeb.Data
         public short? PrintKey { get; set; }
 
         /// <summary>
-        /// Konfig.Artikelnummer: Artikelnummer (OfficeLineItem/Artikelnummer) aller Positionen im echten Betrieb
+        /// Konfig.SageArtikelnummer: Artikelnummer (OfficeLineItem/Artikelnummer) aller Positionen im echten Betrieb
         /// (<see cref="Test"/> = false); null, wenn nichts hinterlegt ist. Im Testbetrieb gilt weiter
         /// <see cref="SageExportService.TestArtikelnummer"/>.
         /// </summary>

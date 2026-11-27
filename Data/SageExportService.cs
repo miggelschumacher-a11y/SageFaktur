@@ -84,7 +84,7 @@ namespace WipSageWeb.Data
 
         /// <summary>
         /// Artikelnummer aller Positionen (OfficeLineItem/Artikelnummer): bei Konfig.SageTest = true
-        /// <see cref="SageExportService.TestArtikelnummer"/>, sonst Konfig.Artikelnummer.
+        /// <see cref="SageExportService.TestArtikelnummer"/>, sonst Konfig.SageArtikelnummer.
         /// </summary>
         public string Artikelnummer { get; set; }
 
@@ -161,12 +161,12 @@ namespace WipSageWeb.Data
                     $"Die Adresse der Sage-Schnittstelle ist keine gültige http- oder https-Adresse:\n{url}\n(Tabelle Konfig, Feld {konfig.ExportUrlFeld})");
             }
 
-            // Artikelnummer: im Testbetrieb wie bisher die Test-Artikelnummer, sonst Konfig.Artikelnummer - ohne sie wird nichts gesendet
+            // Artikelnummer: im Testbetrieb wie bisher die Test-Artikelnummer, sonst Konfig.SageArtikelnummer - ohne sie wird nichts gesendet
             var artikelnummer = konfig.Test ? TestArtikelnummer : (konfig.Artikelnummer ?? "").Trim();
             if (artikelnummer.Length == 0)
             {
                 throw new SageExportException(
-                    "In der Konfiguration ist keine Artikelnummer hinterlegt (Tabelle Konfig, Feld Artikelnummer, weil SageTest = false).");
+                    "In der Konfiguration ist keine Artikelnummer hinterlegt (Tabelle Konfig, Feld SageArtikelnummer, weil SageTest = false).");
             }
 
             var job = new SageExportJob
@@ -464,7 +464,7 @@ namespace WipSageWeb.Data
         //             Menge              Menge
         //             OfficeLineHandle   nil
         //             OfficeLineItem
-        //               Artikelnummer    Konfig.SageTest = true: TestArtikelnummer (04005019), sonst Konfig.Artikelnummer
+        //               Artikelnummer    Konfig.SageTest = true: TestArtikelnummer (04005019), sonst Konfig.SageArtikelnummer
         //             Price              VK (nicht mehr Endpreis)
         //     Wkz                  USD = 1 -> "USD", sonst (0 oder leer) "EUR"
         // ------------------------------------------------------------------------------------------

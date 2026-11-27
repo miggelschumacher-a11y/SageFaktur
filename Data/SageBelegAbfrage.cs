@@ -132,14 +132,56 @@ namespace WipSageWeb.Data
         public static bool RechnungAusDatenbank(UebertragenerPa row) =>
             row.RechNr.HasValue || row.RechDat.HasValue || row.BelegJahrR.HasValue || !string.IsNullOrWhiteSpace(row.Rechnungsart);
 
+        // Belegarten aus Sage (Spalte "Bezeichnung" in "sage Belegarten.csv"), zugeordnet über den Nummernkreis:
+        // VL... -> Lieferschein-Spalten, VF... -> Rechnungs-Spalten. Angebote, Aufträge, Auftragsbestätigungen,
+        // Rahmenverträge usw. (Nummernkreise VP, VV, VR) gehören in keine der beiden Gruppen und werden übergangen.
+        private static readonly HashSet<string> LieferscheinArten = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Lieferschein",                  // VLL
+            "Lieferschein Import",           // VLX
+            "Interner Lieferschein",         // VLI
+            "Rücklieferschein",              // VLR
+            "Rücklieferschein Import",       // VLC
+            "Proformarücklieferung VDA",     // VLV
+            "Abnahme"                        // VLY
+        };
+
+        private static readonly HashSet<string> RechnungArten = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Rechnung",                              // VFR
+            "Rechnung Import",                       // VFC
+            "Sammelrechnung",                        // VSR
+            "Sammelrechnung Import",                 // VSX
+            "Direktrechnung",                        // VSD
+            "Direktrechnung Import",                 // VSY
+            "Sofortrechnung",                        // VSL
+            "Sofortrechnung Import",                 // VSZ
+            "Servicerechnung",                       // VFX
+            "Interne Rechnung",                      // VFI
+            "Abrechnung",                            // VFB
+            "Projektschlussrechnung (kumulativ)",    // VFK
+            "Anzahlungsrechnung (erbr. Leistung)",   // VFA
+            "Anzahlungsrechnung (ohne Leistung)",    // VFO
+            "Proformarechnung",                      // VFP
+            "Proformarechnung Import",               // VFQ
+            "Stornorechnung",                        // VFS
+            "Stornorechnung Import",                 // VFY
+            "Storno Sofortrechnung",                 // VFU
+            "Gutschriftverfahren",                   // VFE
+            "Gutschrift Import",                     // VFZ
+            "Gutschrift Sofortrechnung",             // VFV
+            "Gutschriftsantrag",                     // VFW
+            "Guthabenanzeige"                        // VFG
+        };
+
         /// <summary>
         /// Überträgt die Belege aus der Antwort in die History-Zeile - je Gruppe (Lieferschein / Rechnung) nur, wenn ihre
         /// Spalten noch nicht aus der Datenbank gefüllt sind. Zeilen mit gleichen VorID, BelID, Belegart, Belegjahr,
         /// Belegnummer, Belegdatum und LIMSIdentifier_Belegkopf sind ein Beleg.
-        /// Lieferschein: genau einer -> die Spalten werden damit gefüllt; mehrere -> "Not unique"; keiner -> leer.
-        /// Rechnung und Sammelrechnung sind getrennte Belegarten, jede wird für sich gezählt: zwei Rechnungen oder zwei
-        /// Sammelrechnungen -> "Not unique"; sonst wird die eine gezeigt (gibt es je eine Rechnung und eine Sammelrechnung,
-        /// die mit dem späteren Belegdatum).
+        /// Welche Belegart zu welcher Gruppe gehört: <see cref="LieferscheinArten"/>, <see cref="RechnungArten"/>.
+        /// Jede Belegart wird für sich gezählt: kommt eine Belegart der Gruppe mehr als einmal vor -> "Not unique";
+        /// sonst wird der Beleg gezeigt - bei mehreren verschiedenen Belegarten der mit dem späteren Belegdatum
+        /// (bei gleichem Datum die höhere Belegnummer). Kein Beleg der Gruppe -> die Spalten bleiben leer.
         /// </summary>
         public static void Uebernehmen(UebertragenerPa row, IEnumerable<SageBelegZeile> zeilen)
         {
@@ -168,10 +210,10 @@ namespace WipSageWeb.Data
 
             if (lieferscheinSetzen)
             {
-                var lieferscheine = belege.Where(b => IstArt(b, "Lieferschein")).ToList();
-                row.LieferscheinNichtEindeutig = lieferscheine.Count > 1;
-                var l = lieferscheine.Count == 1 ? lieferscheine[0] : null;
-                row.Lieferscheinart = l?.Belegart?.Trim();
+                var lieferscheine = belege.Where(b => LieferscheinArten.Contains(Art(b))).ToList();
+                row.LieferscheinNichtEindeutig = Doppelt(lieferscheine, null);
+                var l = row.LieferscheinNichtEindeutig ? null : Neuester(lieferscheine);
+                row.Lieferscheinart = l == null ? null : Art(l);
                 row.BelegJahrL = l?.Belegjahr;
                 row.LiefNr = l?.Belegnummer;
                 row.LiefDat = l?.Belegdatum;
@@ -179,25 +221,33 @@ namespace WipSageWeb.Data
 
             if (rechnungSetzen)
             {
-                var rechnungen = belege.Where(b => IstArt(b, "Rechnung")).ToList();
-                var sammelrechnungen = belege.Where(b => IstArt(b, "Sammelrechnung")).ToList();
-                row.RechnungNichtEindeutig = rechnungen.Count > 1;
-                row.SammelRechnungNichtEindeutig = sammelrechnungen.Count > 1;
-                var r = row.RechnungNichtEindeutig || row.SammelRechnungNichtEindeutig
-                    ? null
-                    : rechnungen.Concat(sammelrechnungen)
-                                .OrderByDescending(b => b.Belegdatum ?? DateTime.MinValue)
-                                .ThenByDescending(b => b.Belegnummer ?? 0)
-                                .FirstOrDefault();
-                row.Rechnungsart = r?.Belegart?.Trim();
+                var rechnungen = belege.Where(b => RechnungArten.Contains(Art(b))).ToList();
+                row.SammelRechnungNichtEindeutig = Doppelt(rechnungen, "Sammelrechnung");
+                row.RechnungNichtEindeutig = Doppelt(rechnungen.Where(b => !IstArt(b, "Sammelrechnung")), null);
+                var r = row.RechnungNichtEindeutig || row.SammelRechnungNichtEindeutig ? null : Neuester(rechnungen);
+                row.Rechnungsart = r == null ? null : Art(r);
                 row.BelegJahrR = r?.Belegjahr;
                 row.RechNr = r?.Belegnummer;
                 row.RechDat = r?.Belegdatum;
             }
         }
 
+        private static string Art(SageBelegZeile beleg) => (beleg.Belegart ?? "").Trim();
+
         private static bool IstArt(SageBelegZeile beleg, string art) =>
-            string.Equals((beleg.Belegart ?? "").Trim(), art, StringComparison.OrdinalIgnoreCase);
+            string.Equals(Art(beleg), art, StringComparison.OrdinalIgnoreCase);
+
+        // Kommt eine Belegart (nur art, wenn angegeben) mehr als einmal vor?
+        private static bool Doppelt(IEnumerable<SageBelegZeile> belege, string art) =>
+            belege.Where(b => art == null || IstArt(b, art))
+                  .GroupBy(Art, StringComparer.OrdinalIgnoreCase)
+                  .Any(g => g.Count() > 1);
+
+        // Der Beleg mit dem spätesten Belegdatum, bei gleichem Datum die höhere Belegnummer; null, wenn keiner da ist
+        private static SageBelegZeile Neuester(IEnumerable<SageBelegZeile> belege) =>
+            belege.OrderByDescending(b => b.Belegdatum ?? DateTime.MinValue)
+                  .ThenByDescending(b => b.Belegnummer ?? 0)
+                  .FirstOrDefault();
 
         private static string Text(JObject o, string name)
         {
